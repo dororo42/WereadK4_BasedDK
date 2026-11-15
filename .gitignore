@@ -1,0 +1,10 @@
+# 第三方材料与产物
+*.zip
+*.tgz
+*.so
+*.ko
+target/
+# 本地审计物
+audit/
+# handoff 本地 only
+handoffs/
