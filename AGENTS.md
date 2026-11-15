@@ -10,4 +10,8 @@
 
 ## Current Handoff
 
-- (尚无——DK-0 完成后 CREATE)
+- Latest: `handoffs/2026-11-15-204026-dk0-fbtest-offline/HANDOFF.md`
+- Branch: main @ 73d99c0
+- Status: DK-0 离线批次完成，等待 K4 上线真机验收
+
+任何 agent 开始工作前，先读上面的 HANDOFF.md。这份指针由 orbital_handoff 维护，手工交接时请同步更新。
