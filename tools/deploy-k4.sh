@@ -14,6 +14,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/build/fbtest"
 
 [ -x "$BIN" ] || { echo "缺 $BIN —— 先 make fbtest" >&2; exit 1; }
+[[ "$DELAY" =~ ^[0-9]+$ ]] || { echo "停留秒数必须为数字: $DELAY" >&2; exit 1; }
 
 echo "=== 部署到 $K4_HOST:$K4_PORT:/mnt/us/weread-trial/ ==="
 ssh -p "$K4_PORT" "$K4_HOST" "mkdir -p /mnt/us/weread-trial"

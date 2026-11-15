@@ -74,7 +74,7 @@ int wr_fb_open(struct wr_fb *fb, const char *path)
     fb->smem_len = fix.smem_len;
 
     if (fb->bpp != 8) {
-        int e = EBADF;  /* DK-0 只支持 8bpp；显式拒绝而非错误绘制。 */
+        int e = EINVAL;  /* DK-0 只支持 8bpp；显式拒绝而非错误绘制。 */
         close(fb->fd);
         fb->fd = -1;
         return -e;
