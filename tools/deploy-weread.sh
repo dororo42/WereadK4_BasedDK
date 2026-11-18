@@ -10,16 +10,20 @@ set -euo pipefail
 K4_HOST="${K4_HOST:-root@<K4_HOST>}"
 K4_PORT="${K4_PORT:-2222}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="$ROOT/build/weread"
+BIN="${BIN:-$ROOT/build/weread-dyn}"
 MODE="${1:---smoke}"
 
 [ -x "$BIN" ] || { echo "缺 $BIN —— 先 make weread" >&2; exit 1; }
 
 echo "=== 部署到 $K4_HOST:$K4_PORT:/mnt/us/weread/ ==="
-ssh -p "$K4_PORT" "$K4_HOST" "mkdir -p /mnt/us/weread/lua /mnt/us/weread/fonts /mnt/us/weread/lib"
+ssh -p "$K4_PORT" "$K4_HOST" "mkdir -p /mnt/us/weread/lua/lib /mnt/us/weread/fonts /mnt/us/weread/lib /mnt/us/weread/data"
 scp -P "$K4_PORT" -q "$BIN" "$K4_HOST:/mnt/us/weread/weread.new"
-scp -P "$K4_PORT" -q "$ROOT/src/lua/menu.lua" "$K4_HOST:/mnt/us/weread/lua/menu.lua"
-scp -P "$K4_PORT" -q "$ROOT/src/lua/net_smoke.lua" "$K4_HOST:/mnt/us/weread/lua/net_smoke.lua"
+for f in "$ROOT"/src/lua/*.lua; do
+    scp -P "$K4_PORT" -q "$f" "$K4_HOST:/mnt/us/weread/lua/$(basename "$f")"
+done
+for f in "$ROOT"/src/lua/lib/*.lua; do
+    scp -P "$K4_PORT" -q "$f" "$K4_HOST:/mnt/us/weread/lua/lib/$(basename "$f")"
+done
 # DK-2 动态变体 + 复用多看 libcurl（vendor/duokan/lib，NOTICE 标注）
 if [ -x "$ROOT/build/weread-dyn" ]; then
     scp -P "$K4_PORT" -q "$ROOT/build/weread-dyn" "$K4_HOST:/mnt/us/weread/weread-dyn.new"

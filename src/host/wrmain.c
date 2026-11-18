@@ -49,6 +49,17 @@ int main(int argc, char **argv)
     lua_pushboolean(L, smoke);
     lua_setglobal(L, "SMOKE");
 
+    /* 全局 arg 表：arg[0]=script，arg[1..]=其余参数（标准 Lua 语义） */
+    lua_newtable(L);
+    lua_pushstring(L, script);
+    lua_rawseti(L, -2, 0);
+    for (i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--smoke") == 0) continue;
+        lua_pushstring(L, argv[i]);
+        lua_rawseti(L, -2, i);
+    }
+    lua_setglobal(L, "arg");
+
     rc = luaL_dofile(L, script);
     if (rc != 0) {
         fprintf(stderr, "lua error: %s\n", lua_tostring(L, -1));
