@@ -12,3 +12,5 @@ handoffs/
 build/
 # vendor 第三方资产（本机 only）
 vendor/
+# 实验产物
+experiments/dyn/dyn_hello
