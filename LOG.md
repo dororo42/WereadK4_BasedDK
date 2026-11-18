@@ -1,5 +1,59 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-18 · DK-1 step1 真机验收通过（LuaJIT VM + 输入独占 + 五向键菜单）
+
+**目标**：DK-1 分阶段第一步——LuaJIT 2.1 armel 静态 VM + Lua C API 桥 + 内置点阵字体 + evdev 输入 + 五向键菜单，K4 真机可交互（freetype 中文渲染留 step2）。
+
+### 动作
+
+1. **LuaJIT 交叉编译**（最大风险项，已攻克）：vendor/luajit 2.1.1788856981，`HOST_CC="gcc -m32"`（buildvm 指针尺寸须匹配 32 位 ARM target，为此 apt 装 gcc-multilib/libc6-dev-i386）+ `LUAJIT_DISABLE_JIT`（K4/K5 JIT-on 定性崩）+ `BUILDMODE=static`。产出 `libluajit.a`（377KB），真机冒烟 LuaJIT 可跑（27KB 基线）。qemu binfmt 跑 buildvm 方案失败（老工具链 buildvm 在 qemu-arm 下 segfault），-m32 是正解。
+2. **桥选型：Lua C API 而非 FFI**——静态可执行文件无动态符号表，`ffi.C.<sym>` 走 dlsym 解析不到；C API（lua_pushcfunction）静态/动态皆可。`src/bridge/wrbridge.c` 导出 `wr` 全局表：fb_open/close/w/h/refresh/fill/quant/text、input_open/close/poll、millis。
+3. **设备层**：`src/device/input.c/h`（evdev event0=tequila-keypad/event1=fiveway，手工镜像 16B input_event 避 glibc time_t 歧义，键码取自 KOReader event_map_kindle4.lua）；`src/device/font8x16.h`（从 Uni2-VGA16.psf.gz 抽 95 个 ASCII 字形，PSF1 ASCII 直接索引 index==codepoint）；`src/host/wrmain.c`（LuaJIT VM 宿主，SIGINT/TERM 信号安全 cleanup）。
+4. **menu.lua**：五向键 ASCII 菜单（Up/Down 移动、中键选中、Back/Menu/Home 退出），SMOKE 模式只渲染一帧即退（自动化验收）。Makefile 加 luajit/weread 目标，链接补 `-lrt`（老 glibc 的 clock_gettime 在 librt）。
+5. **SMOKE 真机 PASS**：`weread menu.lua --smoke` → EXIT=0，渲染+恢复原屏，dmesg 无 segfault。整条管线（fb 备份→VM 启动→点阵字渲染→刷新→恢复）真机跑通。
+
+### 关键发现 1：输入设备被 KOReader EVIOCGRAB 独占（架构级）
+
+- 交互测试初次失败：按键无反应。写 `tools/evsniff.c` 诊断（用 EVIOCGRAB 抢占测试：抢到=无人独占，EBUSY=已被独占）。
+- 确证：KOReader 运行时 `event0/event1` 均 `[GRABBED-by-other]`——KOReader 用 EVIOCGRAB 独占按键+五向键（屏蔽原生系统）。**即使 SIGSTOP 冻结 KOReader，grab 锁仍由其打开的 fd 持有**，其他读者收不到任何事件。`event2(volume)` free。
+- **修复（生产必需）**：`wr_input_open` 对每个设备 EVIOCGRAB 独占、`wr_input_close` 释放。前台全屏应用必须独占输入，否则原生 cvm/KOReader 会同时读键并重绘盖屏（正是菜单被盖的同款机制）。实测：KOReader 退出后设备全 free，我方菜单启动即抢到（evsniff 反向确认 event0/1 = GRABBED-by-other=我们的菜单），退出后释放回 free（good citizenship，不锁死设备）。
+- 原生框架 cvm **不**独占抓取——所以 KOReader 退出后我方 grab 能成功并排除原生。测试需先让 KOReader 释放（用户手动退出，进度自动保存）。
+
+### 关键发现 2：show() 消息闪现（auto-repeat）
+
+- 现象：中键选中后「press any key」消息一闪即回菜单。根因：按住中键时内核持续发 auto-repeat（value=2），show() 单次 `input_poll(-1)` 被同一按键的 repeat 立即满足。
+- **修复**：`wr_input_poll` 加 `ignore_repeat` 参（跳过 value==2 只认首次按下 value==1）；Lua 侧 `input_poll(t, true)`。menu.lua show() 改为 `while wr.input_poll(-1, true) == nil do end`（循环等真实新按键），主循环也 ignore_repeat（离散按键、防长按重复触发 show/退出）。
+
+### 验证
+
+- 本地：`make host-selftest` HOST-OK；`make weread`/`make fbtest` 重建 exit=0 零警告（仅 dlopen-in-static 无害警告）。
+- 真机：用户确认「正常响应」——高亮移动/中键选中/消息稳定不闪/退出正常；`menu done, sel=6` 干净退出；退出后 evsniff 确认 event0/1 回 `[free]`（grab 已释放）；dmesg 无 segfault。DK-1 step1 交互链全通验收闭环。
+
+### 附带：GitHub/CI 可行性问答（用户提问）
+
+结论=不划算且「公开」有风险：①交叉编译痛点已本地攻克，CI 无增量；②CI 够不到局域网 K4，真机在环验收（deploy/dmesg/目视）替代不了；③公开仓暴露多看固件逆向文档 + 微信读书非官方私有 API 客户端，法律/ToS 敏感。建议维持本地编译；若要可复现性走私有仓 + 自托管 runner，不公开。（未执行任何推送/建仓，等用户明确点头。）
+
+### 下一步
+
+DK-1 step2：freetype 中文渲染路线拍板（复用多看 libfreetype.so.6.5.0 动态变体 vs 上游静态自编）→ fb_draw_text 升级中文。其后 DK-2 网络层（首选复用多看 libcurl+OpenSSL 动态变体）。
+
+## 2026-11-18 · DK-0 真机验收通过（K4 上线批次）
+
+**目标**：解除 K4 离线阻塞，完成 DK-0 真机验收；顺带排查 SSH 认证与内存占用。
+
+### 动作
+
+1. 设备连通性排查：<K4_HOST> 不回 ICMP（ping 100% 丢包）但 ARP REACHABLE——WiFi 唤醒慢，SSH 需长 ConnectTimeout（30s 才握手成功；2s/10s 超时都是假阴性）。deploy 脚本未设 ConnectTimeout 时依赖 OpenSSH 默认超时，可用。
+2. **SSH 认证修复**：设备 2222 = KOReader **魔改版 dropbear**（plugins/SSH.koplugin/main.lua:15-17），authorized_keys 从相对路径 `settings/SSH/authorized_keys` 读取（即 `/mnt/us/koreader/settings/SSH/authorized_keys`），非标准 `/tmp/root/.ssh/`。本机公钥装入该路径后免密登录生效；清理了误写入的 /tmp/root/.ssh（tmpfs，本就重启即消）。备份里发现旧 workbuddy 密钥（历史项目），未动。
+3. **DK-0 真机验收 PASS**：`tools/deploy-k4.sh 5` → 量化自测 PASS；fb 实测 `600x800@8bpp line_length=600 smem_len=966656` 与方案 §4.1 假设一致；图案绘制+恢复刷新成功，EXIT=0；dmesg 无 segfault/fb 报错。屏幕视觉图案用户已目视确认，DK-0 验收完全闭环。
+4. **内存占用分析**（KOReader 在场）：MemTotal 256MB / MemFree 13.9MB（假象），Buffers 33.6 + Cached 48.5 = 82MB 可回收，实际可用 ~96MB；AnonPages 108MB 中 cvm（Java 框架）58.1MB + reader.lua（KOReader）51.5MB 占 ~90%；无 swap，/mnt/us 是 vfat+FUSE 不便建 swapfile。结论：DK-0/1 内存充裕无需调优；开发期可选 `echo 3 > /proc/sys/vm/drop_caches`（零风险）或 `/etc/init.d/framework stop`（-58MB，可逆，本客户端走 raw fb ioctl 不依赖框架）；不建议上 swap。
+5. Committed_AS 912MB / CommitLimit 128MB 说明：overcommit_memory=0 启发式模式不看 CommitLimit，912MB 是承诺预留量（Java arena/LuaJIT 地址空间）非实际占用，对几十 MB 级的本项目无影响。
+6. HANDOFF 打钩：立即下一步第 1 条 → done；K4 离线 blocker → 解除。
+
+### 下一步
+
+DK-1：LuaJIT 2.1 armel 静态交叉编译（-joff）+ wrbridge.c FFI + menu.lua 按键菜单。
+
 ## 2026-11-16 · 铁律修订：多看资产复用解禁（标注制度）
 
 **用户拍板**：多看系统刷机后与原系统并存；本系统走 KUAL 启动（并存不碰 rc5）；
