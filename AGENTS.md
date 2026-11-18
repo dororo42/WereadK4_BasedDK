@@ -10,8 +10,8 @@
 
 ## Current Handoff
 
-- Latest: `handoffs/2026-11-18-232348-dk1-step2-freetype-chinese/HANDOFF.md`
-- Branch: main @ 55a0529
-- Status: DK-1 step2 完成并真机验收，剩用户侧交互复验后进 DK-2
+- Latest: `handoffs/2026-11-19-073027-dk2-net-tls-reused/HANDOFF.md`
+- Branch: main @ b6f5cd3
+- Status: [TODO: 进行中 / 等待决策 / …]
 
 任何 agent 开始工作前，先读上面的 HANDOFF.md。这份指针由 orbital_handoff 维护，手工交接时请同步更新。
