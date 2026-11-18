@@ -10,8 +10,8 @@
 
 ## Current Handoff
 
-- Latest: `handoffs/2026-11-19-073027-dk2-net-tls-reused/HANDOFF.md`
-- Branch: main @ b6f5cd3
+- Latest: `handoffs/2026-11-19-075023-dk2-biz-infra-smoke/HANDOFF.md`
+- Branch: main @ 8fd9911
 - Status: [TODO: 进行中 / 等待决策 / …]
 
 任何 agent 开始工作前，先读上面的 HANDOFF.md。这份指针由 orbital_handoff 维护，手工交接时请同步更新。
