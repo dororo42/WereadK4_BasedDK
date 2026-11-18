@@ -16,20 +16,35 @@ MODE="${1:---smoke}"
 [ -x "$BIN" ] || { echo "缺 $BIN —— 先 make weread" >&2; exit 1; }
 
 echo "=== 部署到 $K4_HOST:$K4_PORT:/mnt/us/weread/ ==="
-ssh -p "$K4_PORT" "$K4_HOST" "mkdir -p /mnt/us/weread/lua /mnt/us/weread/fonts"
+ssh -p "$K4_PORT" "$K4_HOST" "mkdir -p /mnt/us/weread/lua /mnt/us/weread/fonts /mnt/us/weread/lib"
 scp -P "$K4_PORT" -q "$BIN" "$K4_HOST:/mnt/us/weread/weread.new"
 scp -P "$K4_PORT" -q "$ROOT/src/lua/menu.lua" "$K4_HOST:/mnt/us/weread/lua/menu.lua"
+scp -P "$K4_PORT" -q "$ROOT/src/lua/net_smoke.lua" "$K4_HOST:/mnt/us/weread/lua/net_smoke.lua"
+# DK-2 动态变体 + 复用多看 libcurl（vendor/duokan/lib，NOTICE 标注）
+if [ -x "$ROOT/build/weread-dyn" ]; then
+    scp -P "$K4_PORT" -q "$ROOT/build/weread-dyn" "$K4_HOST:/mnt/us/weread/weread-dyn.new"
+fi
+if ! ssh -p "$K4_PORT" "$K4_HOST" "test -s /mnt/us/weread/lib/libcurl.so.4"; then
+    scp -P "$K4_PORT" -q "$ROOT/vendor/duokan/lib/libcurl.so.4.3.0" \
+        "$K4_HOST:/mnt/us/weread/lib/libcurl.so.4.new"
+    echo "(libcurl 首次部署 1.9MB)"
+fi
 if ! ssh -p "$K4_PORT" "$K4_HOST" "test -s /mnt/us/weread/fonts/wqy-microhei.ttc"; then
     scp -P "$K4_PORT" -q "$ROOT/vendor/duokan/fonts/wqy-microhei.ttc" \
         "$K4_HOST:/mnt/us/weread/fonts/wqy-microhei.ttc"
     echo "(字体首次部署 5.2MB)"
 fi
 ssh -p "$K4_PORT" "$K4_HOST" \
-    "mv /mnt/us/weread/weread.new /mnt/us/weread/weread && chmod +x /mnt/us/weread/weread"
+    "mv /mnt/us/weread/weread.new /mnt/us/weread/weread && chmod +x /mnt/us/weread/weread; \
+     [ -f /mnt/us/weread/weread-dyn.new ] && mv /mnt/us/weread/weread-dyn.new /mnt/us/weread/weread-dyn && chmod +x /mnt/us/weread/weread-dyn; \
+     [ -f /mnt/us/weread/lib/libcurl.so.4.new ] && mv /mnt/us/weread/lib/libcurl.so.4.new /mnt/us/weread/lib/libcurl.so.4; \
+     true"
 
 echo "=== 执行（$MODE） ==="
 if [ "$MODE" = "--interactive" ]; then
     exec ssh -t -p "$K4_PORT" "$K4_HOST" "/mnt/us/weread/weread /mnt/us/weread/lua/menu.lua"
+elif [ "$MODE" = "--net-smoke" ]; then
+    ssh -p "$K4_PORT" "$K4_HOST" "/mnt/us/weread/weread-dyn /mnt/us/weread/lua/net_smoke.lua; echo EXIT=\$?"
 else
     ssh -p "$K4_PORT" "$K4_HOST" \
         "/mnt/us/weread/weread /mnt/us/weread/lua/menu.lua --smoke; rc=\$?; echo EXIT=\$rc; echo '--- dmesg tail ---'; dmesg | tail -n 5"

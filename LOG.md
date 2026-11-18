@@ -1,5 +1,30 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-19 · DK-1 完成确认 + DK-2 网络层打通（动态变体 + 复用多看 libcurl TLS PASS）
+
+**用户确认**：DK-1 交互之前已验证——DK-1 全部完成。
+**DK-2 拍板执行**：首选路线（复用多看 libcurl 动态变体）一次打通。
+
+### 动作
+
+1. **最小动态链接实验**：experiments/dyn/dyn_hello.c 用 TC(gcc14) 编码 + `-L~/k4-sysroot/lib` 链接设备 glibc 2.12.1；产物 interpreter=/lib/ld-linux.so.3，最高符号版本 GLIBC_2.4；设备实跑 EXIT=0——动态变体技术前提全验证。
+2. **复用资产抽取**：多看 libcurl.so.4.3.0（curl 7.29.0 + OpenSSL 1.0.1e 内嵌，1.9MB）→ vendor/duokan/lib/（NOTICE 已标注，部署名 libcurl.so.4）；curl 7.29.0 头文件从 GitHub tag 取（curl.se 归档 URL 已失效）。
+3. **手工 curlbuild.h（armel）**：SIZEOF_LONG=4 / curl_off_t=long long(64bit)，**必须含 dist 尾部的两个 typedef**（curl_socklen_t/curl_off_t）——漏了会报 curl_off_t undeclared（首败根因）。
+4. **网络层三件**：`src/device/net.c`（curl_easy 最小面：http_get，VERIFYPEER 开/FOLLOWLOCATION/TIMEOUT 30/NOSIGNAL，body 动态缓冲）、`net_stub.c`（静态构建 no-op，桥接口不变）、wrbridge.c 的 wr_register 追加 wr_net_register 调用（静态/动态两态无差别）。
+5. **Makefile weread-dyn 目标**：动态链接（无 -static），`-L~/k4-sysroot/lib`（libc 基线 2.12.1）+ `-l:libcurl.so.4.3.0` 精确名 + rpath `$ORIGIN/lib`。产物 3MB，NEEDED libcurl.so.4/librt/libdl/libgcc_s/libc，最高 GLIBC_2.7。
+6. **链接坑两个**：① gcc 注入 `--sysroot`，**相对路径 -L 会被前缀到 sysroot 下**（首败）→ 全部绝对路径；② `-lcurl` 搜索名在 sysroot 语义下解析失败 → `-l:精确文件名`（ld 记 SONAME libcurl.so.4，运行期 rpath 命中）。
+7. **部署脚本升级** `tools/deploy-weread.sh`：新增 weread-dyn/lib/net_smoke 部署 + `--net-smoke` 模式（一键部署+TLS 验证）。
+
+### 真机 TLS 冒烟（PASS）
+
+- `https://weread.qq.com/` → **status=200, 773KB**（VERIFYPEER 开启，设备 ca-bundle.pem 验签通过，复用 OpenSSL 1.0.1e）
+- `https://www.baidu.com/` → curl rc=60（2015 时代 bundle 缺新根）——仅影响通用冲浪，业务域无关；**保持证书验证开启，勿关闭**。
+- deploy-weread.sh --net-smoke 全链路复现 PASS（EXIT=0）。
+
+### 下一步
+
+DK-2 业务层（方案 §五）：auth.lua 扫码登录 / api.lua 签名移植（weread_K4 插件源 /home/doro/weread_K4.koplugin/）/ shelf / download / reader / sync。网络层基座（http_get）已就绪。
+
 ## 2026-11-18 · DK-1 step2 真机验收通过（freetype 中文渲染）
 
 **目标**：DK-1 step2——freetype 接入，菜单升级中文。路线拍板：**上游 freetype 2.13.2 静态自编**

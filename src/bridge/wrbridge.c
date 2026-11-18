@@ -15,6 +15,7 @@
 #include "input.h"
 #include "font8x16.h"
 #include "render.h"
+#include "net.h"
 
 static struct wr_fb    g_fb;
 static int             g_fb_open;
@@ -256,6 +257,8 @@ int wr_register(lua_State *L)
         lua_setfield(L, -2, f->name);
     }
     lua_setglobal(L, "wr");
+    /* 网络层（net.c=动态变体真实现 / net_stub.c=静态占位）追加导出 */
+    wr_net_register(L);
     return 0;
 }
 

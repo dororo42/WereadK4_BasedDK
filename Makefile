@@ -9,7 +9,7 @@ LDFLAGS := -static
 
 BUILD := build
 
-.PHONY: all clean fbtest weread host-selftest
+.PHONY: all clean fbtest weread weread-dyn host-selftest
 
 all: fbtest weread
 
@@ -40,6 +40,8 @@ $(LUAJIT_A):
 	  TARGET_LDFLAGS=-static
 
 WEREAD_SRCS := src/device/fb.c src/device/input.c src/device/render.c src/bridge/wrbridge.c src/host/wrmain.c
+NET_STATIC := src/device/net_stub.c
+NET_DYN    := src/device/net.c
 WEREAD_INC  := -Isrc/device -Isrc/bridge -I$(LUAJIT_INC) -I$(FT_INC)
 WEREAD_HDRS := src/device/fb.h src/device/input.h src/device/font8x16.h src/device/render.h src/bridge/wrbridge.h
 
@@ -47,8 +49,25 @@ weread: $(BUILD)/weread
 
 $(BUILD)/weread: $(WEREAD_SRCS) $(WEREAD_HDRS) $(LUAJIT_A) $(FT_A)
 	@mkdir -p $(BUILD)
-	$(CC) $(CFLAGS) $(WEREAD_INC) -o $@ $(WEREAD_SRCS) \
+	$(CC) $(CFLAGS) $(WEREAD_INC) -o $@ $(WEREAD_SRCS) $(NET_STATIC) \
 	  -Wl,--start-group $(LUAJIT_A) $(FT_A) -lm -ldl -lrt -Wl,--end-group $(LDFLAGS)
+
+# ---- DK-2: 动态变体（复用多看 libcurl.so.4.3.0 = curl7.29+OpenSSL1.0.1e 内嵌）----
+# 链接基线：~/k4-sysroot/lib（设备 glibc 2.12.1），设备 /lib/ld-linux.so.3 加载。
+# 运行期 rpath=$ORIGIN/lib 找 /mnt/us/weread/lib/libcurl.so.4。
+CURL_INC := vendor/curl-7.29.0/include
+DKCURL   := vendor/duokan/lib/libcurl.so.4.3.0
+
+weread-dyn: $(BUILD)/weread-dyn
+
+$(BUILD)/weread-dyn: $(WEREAD_SRCS) src/device/net.c $(WEREAD_HDRS) src/device/net.h $(LUAJIT_A) $(FT_A) $(DKCURL)
+	@mkdir -p $(BUILD)
+	$(CC) -std=gnu99 -Wall -Wextra -O2 $(WEREAD_INC) -I$(CURL_INC) -o $@ \
+	  $(WEREAD_SRCS) $(NET_DYN) \
+	  -Wl,--start-group $(LUAJIT_A) $(FT_A) -lm -lrt -Wl,--end-group \
+	  -L$(HOME)/k4-sysroot/lib -L$(CURDIR)/vendor/duokan/lib \
+	  -l:libcurl.so.4.3.0 -ldl \
+	  -Wl,-rpath,'$$ORIGIN/lib'
 
 # 主机侧快速语法检查（主机 gcc，跑量化自测；fbtest 目标才用交叉工具链）
 host-selftest:
