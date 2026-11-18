@@ -98,11 +98,10 @@ KOReader 侧复刻判定：完全可复刻（同一对 ioctl），无需内核/�
 ### 2.4 网络 / TLS
 
 - weread API endpoint 形态 `[L2]`：weread_K4 插件双机在用（登录/续期/书架/章节/进度/上报），见方案 §4.3 表。
-- **TLS 栈 `[L4]` 未验证**：方案定 libcurl + OpenSSL 3.x 静态编译（DK-2 才需要）。
-  **固件一手佐证（2026-11-16 固件盘点）**：多看在 K4 的 TLS = OpenSSL 1.0.1e 静态内嵌 libcurl 7.29.0，
-  2015 服役至今——armel/armv7 + 2.6.31 上 OpenSSL 生产可用有长期先例。详见 `docs/duokan-firmware-inventory.md` §五。
-  DK-2 开工第一件事先做 OpenSSL3 静态编译 + K4 冒烟（风险项，方案 §八未列，此处补记）；
-  若 3.x 有坑，降级 1.1.1（多看验证过的保守档，1.0.1e 已 EOL 不选）。
+- **TLS 栈 `[L4]`**：**首选复用多看 libcurl.so.4**（curl 7.29.0 + OpenSSL 1.0.1e 内嵌，零编译，K4 十年服役先例）
+  ——需动态主进程变体（复刻多看 LD_LIBRARY_PATH 模式，链接期用设备真实 /lib 作 sysroot）。
+  备选：OpenSSL 3.x 静态自编（坑则降 1.1.1）。两条路线 DK-2 开工拍板，
+  判据与配方见 `docs/duokan-firmware-inventory.md` §四/§五。
 
 ### 2.5 电源 / 系统底座
 
@@ -141,7 +140,7 @@ KOReader 侧复刻判定：完全可复刻（同一对 ioctl），无需内核/�
 | 方案阶段 | 依赖的驱动/架构事实 | 状态 |
 |---|---|---|
 | DK-0 fb/eink | §2.1 全部 + §2.3 工具链 | 代码完成，真机验收 blocked（K4 离线） |
-| DK-1 LuaJIT+菜单 | §2.2 input（KEY 码待实测）+ 模式 1/3 + **字体已定：vendor/duokan/fonts（wqy-microhei CJK 主 + DejaVu Latin，固件盘点抽取）**；freetype 从上游源码静态编译（固件 .so 不复用，见 inventory §四） | 待 DK-0 验收后开工 |
-| DK-2 业务 | §2.4 API（已验证形态）+ TLS 栈（**未验证，先冒烟**） | — |
+| DK-1 LuaJIT+菜单 | §2.2 input（KEY 码待实测）+ 模式 1/3 + **字体已定版**：vendor/duokan/fonts（wqy-microhei CJK 主 + DejaVu Latin；授权字体可选配，随 NOTICE 标注）+ freetype 上游静态自编（设备离线约束下最快；复用固件 libfreetype 需动态变体，归入 DK-2 拍板点） | 待 DK-0 验收后开工 |
+| DK-2 业务 | §2.4 API（已验证形态）+ **TLS：首选复用多看 libcurl+OpenSSL（动态主进程变体，需 pull 设备 /lib 作 sysroot）；备选静态 OpenSSL 自编**，开工拍板 | — |
 | DK-3 稳定性 | §2.5 LIPC 电源 + MemFree 基线 | — |
 | DK-4 集成 | 模式 6 → KUAL 替代 rc5 路线 | — |

@@ -68,19 +68,28 @@ WaiteAKey（唯一未 strip 且带 debug_info 的 ELF）：按键等待器。
 - 微软系：Arial / verdana / GOTHIC / trebuc / Comic
 - 多看自制：dk-symbol.ttf（符号）、lingoes.ttf
 
-## 四、对本项目的资产判定（结合铁律）
+## 四、对本项目的资产判定（2026-11-16 铁律修订：复用允许+标注）
 
-| 资产类 | 判定 | 依据 |
+> 用户修订铁律：**允许复用多看代码/资产，必须标注来源与版本；先把项目做起来，后续再优化。**
+> 复用与自研的边界不再是"能否复用"，而是"哪条路径最快可用、标注是否到位"。
+
+| 资产类 | 判定 | 复用路径与标注 |
 |---|---|---|
-| KindleApp/libdkkernel/libkss 二进制 | ❌ 不复用 | 项目铁律 + 闭源 stripped |
-| 固件内 .so（freetype/curl 等） | ❌ 不 dlopen | ① 铁律（多看编译成品）；② EABI4 .so 依赖宿主 libc，EABI5 静态 glibc 宿主 dlopen 有静态 TLS/加载器坑；③ **正确路径 = 上游开源源码静态编译**（freetype → DK-1，curl+OpenSSL3 → DK-2），多看 .so 仅作版本与可行性参照 |
-| **字体文件（数据，非代码）** | ✅ 可用 | 开源字体已入 vendor/duokan/fonts；授权字体留解包区供本机配置 |
-| 启动链/LIPC 脚本模式 | ✅ 借鉴 | rundk.sh 一手实录如上 |
-| dk2system.bin 切换屏原图 | 参考 | 600×800 4bpp/8bpp 双形态，佐证量化 16 级设计 |
+| KindleApp/libdkkernel/libkss 二进制本体 | ❌ 仍不复用执行 | 闭源 stripped 大件，无复用价值；仅作架构/接口取证 |
+| **固件内 .so（freetype/curl/z 等）** | ✅ **可复用（标注）** | 两种落地形态：① **动态主进程变体**——复刻多看自己的模式（interpreter `/lib/ld-linux.so.3` 取原生 libc/libm/libstdc++ + `LD_LIBRARY_PATH` 挂自带 lib 副本，rundk.sh:386 一手实证）；前提=链接期用设备真实 libc 作 sysroot（glibc 符号版本对齐，K4 在线后 `ssh` pull `/lib` 一条命令）；② 备选=上游源码自编译静态（无 glibc 风险）。**静态主进程 + dlopen 固件 .so 不可行**（双 libc 堆/errno 分裂）。标注=来源 DK_System/xKindle 版本 36515.rtm + 各文件 SHA-256 |
+| **字体（数据）** | ✅ 已复用 | 开源子集已入 `vendor/duokan/fonts/`（标注哈希+授权）；**授权字体（方正/华文/微软系）本机可用**，部署到设备随 NOTICE 标注 |
+| 启动链/LIPC 脚本模式 | ✅ 借鉴+标注 | rundk.sh 一手实录；我们走 KUAL 不碰 rc5 |
+| dk2system.bin 切换屏原图 | 参考 | 佐证 16 级量化设计 |
 
-## 五、TLS 栈可行性佐证（更新 §2.4 风险注记）
+**多看自己的动态复用配方（KindleApp NEEDED 一手实证，可直接照抄）**：
+- 取自原生系统：libc.so.6 / libm.so.6 / libpthread.so.0 / libgcc_s.so.1 / libstdc++.so.6
+- 取自带包 lib/（13 个）：libasound/libz/libfreetype/libxml2/libiconv/libcurl/libzip/libunrar/libcares/libdkkernel/libjson-c/libkss
+- 运行时：`LD_LIBRARY_PATH=.:$SYS_LITE_PATH/lib/:../lib/` + `FONTCONFIG_PATH`（rundk.sh:385-389）
 
-多看在 K4 上跑 TLS 的先例 = **OpenSSL 1.0.1e（2013）静态内嵌 libcurl**，2015 固件服役至今——
-armel/armv7 + 2.6.31 上 OpenSSL 生产可用有长期实证。本项目 DK-2 计划 OpenSSL 3.x 静态编译：
-先例支持"可行"，但 3.x 对内核版本无硬要求、对 glibc 符号有要求（静态编译自带 libc 则无碍），
-仍按原计划 DK-2 开工先冒烟；若 3.x 交叉静态有坑，1.1.1 是已被多看验证的保守档（1.0.1e 已 EOL 不选）。
+## 五、TLS 栈（2026-11-16 铁律修订后简化）
+
+复用多看 `libcurl.so.4.3.0`（curl 7.29.0 + OpenSSL 1.0.1e 内嵌）= **零编译获得 TLS**，
+条件是走动态主进程变体（§四①）。此前"OpenSSL 3.x 静态编译冒烟"降为备选路线
+（若坚持全静态宿主）。两条路线 DK-2 开工时按设备在线状态拍板：
+- 设备在线（可 pull /lib sysroot）→ 动态变体 + 复用 libcurl（先做起来，最快）
+- 全静态坚持 → OpenSSL 3.x 自编冒烟，坑则降 1.1.1（多看 1.0.1e 2015 服役 = armel 长期先例）
