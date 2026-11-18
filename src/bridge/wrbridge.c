@@ -14,6 +14,7 @@
 #include "fb.h"
 #include "input.h"
 #include "font8x16.h"
+#include "render.h"
 
 static struct wr_fb    g_fb;
 static int             g_fb_open;
@@ -112,6 +113,75 @@ static int l_fb_quant(lua_State *L)
     return 0;
 }
 
+/* fb_get(x, y) -> 0..255 当前像素灰度（SMOKE 自检用）。 */
+static int l_fb_get(lua_State *L)
+{
+    int x = (int)luaL_checkinteger(L, 1);
+    int y = (int)luaL_checkinteger(L, 2);
+    if (!g_fb_open || x < 0 || y < 0 ||
+        x >= (int)g_fb.xres || y >= (int)g_fb.yres) { lua_pushinteger(L, -1); return 1; }
+    lua_pushinteger(L, g_fb.mem[(size_t)y * g_fb.line_length + x]);
+    return 1;
+}
+
+/* ---- font（freetype，DK-1 step2 中文渲染） ---- */
+
+static int l_font_load(lua_State *L)
+{
+    const char *path = luaL_checkstring(L, 1);
+    int px = (int)luaL_optinteger(L, 2, 28);
+    int id = wr_ft_load(path, px);
+    if (id < 0) {
+        lua_pushnil(L);
+        lua_pushfstring(L, "font_load(%s) failed: %d", path, id);
+        return 2;
+    }
+    lua_pushinteger(L, id);
+    return 1;
+}
+
+static int l_font_close(lua_State *L)
+{
+    wr_ft_unload((int)luaL_checkinteger(L, 1));
+    return 0;
+}
+
+/* fb_text_ft(id, x, y, utf8 [, fg=0]) -> 结束 x | nil, err。y 为行顶。 */
+static int l_fb_text_ft(lua_State *L)
+{
+    int id = (int)luaL_checkinteger(L, 1);
+    int x = (int)luaL_checkinteger(L, 2);
+    int y = (int)luaL_checkinteger(L, 3);
+    const char *s = luaL_checkstring(L, 4);
+    int fg = (int)luaL_optinteger(L, 5, 0);
+    int endx;
+
+    if (!g_fb_open) { lua_pushnil(L); lua_pushstring(L, "fb not open"); return 2; }
+    endx = wr_ft_draw(&g_fb, id, x, y, s, (uint8_t)fg);
+    if (endx < 0) {
+        lua_pushnil(L);
+        lua_pushfstring(L, "fb_text_ft failed: %d", endx);
+        return 2;
+    }
+    lua_pushinteger(L, endx);
+    return 1;
+}
+
+/* font_width(id, utf8) -> px 宽度 | nil, err */
+static int l_font_width(lua_State *L)
+{
+    int id = (int)luaL_checkinteger(L, 1);
+    const char *s = luaL_checkstring(L, 2);
+    int w = wr_ft_width(id, s);
+    if (w < 0) {
+        lua_pushnil(L);
+        lua_pushfstring(L, "font_width failed: %d", w);
+        return 2;
+    }
+    lua_pushinteger(L, w);
+    return 1;
+}
+
 /* ---- input ---- */
 
 static int l_input_open(lua_State *L)
@@ -165,6 +235,11 @@ static const luaL_Reg wr_funcs[] = {
     { "fb_fill",     l_fb_fill     },
     { "fb_text",     l_fb_text     },
     { "fb_quant",    l_fb_quant    },
+    { "fb_get",      l_fb_get      },
+    { "font_load",   l_font_load   },
+    { "font_close",  l_font_close  },
+    { "fb_text_ft",  l_fb_text_ft  },
+    { "font_width",  l_font_width  },
     { "input_open",  l_input_open  },
     { "input_close", l_input_close },
     { "input_poll",  l_input_poll  },
@@ -186,6 +261,7 @@ int wr_register(lua_State *L)
 
 void wr_cleanup(void)
 {
+    wr_ft_done();  /* 字体在 fb 关闭前后均可释放，与设备无关 */
     if (g_in_open) { wr_input_close(&g_in); g_in_open = 0; }
     if (g_fb_open) {
         if (g_backup) {

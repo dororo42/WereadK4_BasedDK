@@ -1,5 +1,34 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-18 · DK-1 step2 真机验收通过（freetype 中文渲染）
+
+**目标**：DK-1 step2——freetype 接入，菜单升级中文。路线拍板：**上游 freetype 2.13.2 静态自编**
+（复用多看 libfreetype 的动态变体归 DK-2 与 libcurl 一起做——届时反正要做 /lib sysroot；
+静态自编在设备在线窗口外也零依赖，FreeType License=BSD 类可静态链接，NOTICE 标注）。
+
+### 动作
+
+1. **freetype 2.13.2 交叉静态编译**：`--host=arm-kindle5-linux-gnueabi --disable-shared --enable-static --without-{zlib,bzip2,png,harfbuzz,brotli}`（最小核心，TTF/TTC 渲染够用；ftgzip 自带内部 inflate 不需外部 -lz）。产出 4.5MB `libfreetype.a`（vendor/freetype，gitignored）。
+2. **渲染层** `src/device/render.c/h`：FT_Init/FT_New_Face(face 0)/FT_Set_Pixel_Sizes（px 6~96 钳制）；UTF-8 手写解码器（1-4 字节，非法字节跳过）；字形混合 `dst=(dst*(255-cov)+fg*cov+127)/255` 背景透明；基线=y+ascender/64；行 stride=line_length、越界裁剪。最多 4 个并发字体句柄。
+3. **桥扩展** `wrbridge.c`：`font_load(path[,px=28])` / `font_close(id)` / `fb_text_ft(id,x,y,utf8[,fg])` / `font_width(id,utf8)` / `fb_get(x,y)`（像素自检用）。wr_cleanup 统一 wr_ft_done。
+4. **menu.lua 中文升级**：主字号 30 + 小字号 20；中文菜单项（继续阅读/书架/搜索/同步进度/设置/退出）+ 中文页脚；**点阵字体按次回退**（fb_text_ft 失败落 fb_text，缺字体文件整体回退 step1 英文模式）；draw() 加 fb_quant()（Duokan 量化收敛后再刷新）。SMOKE 增加**像素自检**（采样标题/首项/页脚区最小灰度，>200=字形区全白=失败）——无眼睛也可自动验收。
+5. **SMOKE 容错**：input_open 失败不再 assert（KOReader EVIOCGRAB 独占时仍可自动验收渲染）；交互模式保持必须拿到输入。
+6. **部署脚本** `tools/deploy-weread.sh`：weread+lua+字体（首次 5.2MB）三件部署，默认 SMOKE，`--interactive` 进交互。布局 `/mnt/us/weread/{weread,lua,fonts}`。
+7. **DK-2 铺路（趁设备在线）**：设备 `/lib` 关键库归档 `~/k4-sysroot/lib/`——**实测设备 glibc=2.12.1**（2011-09-23），DK-2 动态变体的链接基线（TC 自带 glibc 更新，不可直接动态链接）。
+
+### 真机验收（PASS）
+
+- SMOKE：`ft=on`、pixel-check title=0 item1=0 footer=102（字形笔画确凿）、EXIT=0、dmesg 净、渲染后恢复原屏。
+- 中文渲染全管线：UTF-8→freetype→8bpp 混合→Duokan 量化→0x46dd partial 刷新。
+- 交互链路不变（step1 已验证五向导航）；KOReader 当前未运行，设备处于可交互状态。
+- 构建产物 7MB 静态 exe（LuaJIT+freetype 内嵌），零代码警告（dlopen 链接注记为 LuaJIT 静态库既有无害产物）。
+
+### 下一步
+
+DK-1 收尾交互复验（用户侧：`tools/deploy-weread.sh --interactive`，五向键导航中文菜单）后即完成 DK-1，
+进 DK-2 网络层：首选复用多看 libcurl+OpenSSL 动态变体（~/k4-sysroot 基线 glibc 2.12.1），
+备选 OpenSSL 3.x 静态自编。
+
 ## 2026-11-18 · DK-1 step1 真机验收通过（LuaJIT VM + 输入独占 + 五向键菜单）
 
 **目标**：DK-1 分阶段第一步——LuaJIT 2.1 armel 静态 VM + Lua C API 桥 + 内置点阵字体 + evdev 输入 + 五向键菜单，K4 真机可交互（freetype 中文渲染留 step2）。
