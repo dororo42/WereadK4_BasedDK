@@ -10,3 +10,5 @@ audit/
 handoffs/
 # 本地构建产物
 build/
+# vendor 第三方资产（本机 only）
+vendor/

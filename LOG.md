@@ -1,5 +1,22 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-16 · 多看固件包原件盘点（用户澄清：原始文档=固件包本身）
+
+**目标**：以固件原件（非评估报告）为一手来源，取证 K4 可用的底层资产。
+
+### 动作
+
+1. 校验 `/data/webdav/K4(xKindle_2015-05-15.36515.rtm).zip` SHA-256 与逆向报告一致；解包 1255 节点到 `/home/doro/duokan-fw-extract/`（仓库外工作区）。
+2. **KindleApp 固件一手复核**（交叉 objdump，不经过报告转述）：设备路径 `/dev/fb0` + `/dev/input/event0/1/2`（strings）；fb 模块 0x494000–0x494d40 十处 ioctl；字面量池逐码计数 0x46db×1 / 0x46dd×1 / 0x4602×2 / 0x46f0 / 0x46f1 / 0x46e9 / 0x46ed，未用项 0x46e4/0x46ef/0x46e1/0x46f5 全 0——**逆向报告 §3 ioctl 清单经原件复验成立**。0x4600 计数为 0 的解释：ARM 立即数可编码（0x46 rot8），走 mov 不进池。
+3. 运行时盘点：libfreetype.so.6.5.0（EABI4，NEEDED libz+libc）、libcurl.so.4.3.0（**curl 7.29.0 + OpenSSL 1.0.1e 内嵌**，解释包内无 libssl）、libdkkernel 10.9MB 等 13 库；字体 18 个（sysfonts 5 + userfonts 13）；rundk.sh GBK 转码实录启动链（S95framework 降级 + duokantag + LIPC）。
+4. **资产判定**：固件 .so 不 dlopen（①铁律 ②EABI4 依赖宿主 libc + 静态 glibc 宿主 dlopen 坑 → 正确路径=上游源码静态编译）；**字体=数据资产可用**——开源可再分发子集（wqy-microhei.ttc GPLv2+FE、DejaVuSans.ttf）抽到 `vendor/duokan/fonts/`（vendor/ 已 gitignore），授权字体（方正/华文/微软系）留解包区本机用。
+5. 产出 `docs/duokan-firmware-inventory.md`（一手盘点）+ 更新 `docs/duokan-k4-driver-architecture.md`（DK-1 字体源定版 + TLS 先例佐证改写：多看 OpenSSL 1.0.1e 2015 服役 = armel 生产先例，1.1.1 为保守降级档）。
+
+### 注意
+
+- 字面量池 grep 格式坑：NiLuJe binutils `objdump -s` 每字 8 hex 字符无空格（`db460000`），带空格 pattern 全零是假阴性。
+- /tmp/ka_text.hex（19MB 中间物，临时）。
+
 ## 2026-11-16 · 多看逆向资产抽取（docs/）
 
 **目标**：定位本机多看逆向原始文档，抽取 K4 实际可靠的底层驱动事实与可用架构，固化进项目。
