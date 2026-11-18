@@ -1,5 +1,31 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-19 · DK-2 业务层基础设施：API/登录 11 项真机验证全 PASS
+
+**目标**：DK-2 业务层第一波——网络扩展 + 协议层移植 + 登录流程 + 自动验证。
+
+### 动作
+
+1. **插件源研究**（/home/doro/weread_K4.koplugin/weread/lib/）：发现 v9.x 已迁 **gateway 模式**——登录后 apikeyGet 拿 key，数据 API 走 POST i.weread.qq.com/api/agent/gateway + Bearer（方案 §4.3 旧 Cookie 直连表过时）；protocol.lua 纯 Lua 可原样移植（sign/e/web_app_id）；QR 非图片而是本地编码器（qrmessage），登录 URL=/web/confirm?uid=；NEED_OTP=新设备短信验证码状态。
+2. **net.c 扩展** `http_req(opts)`：method/headers/body/响应头收集（同名头 \n 拼接，Set-Cookie 多值语义）；坑：LuaJIT pushfstring 不保证 %.*s，改纯栈 concat。
+3. **纯 Lua 四件移植**（铁律标注来源）：crypto.lua（MD5/SHA256）/protocol.lua（改 require 路径）/cookie.lua/qrencode.lua（speedata/luaqrcode MIT，本地验证 29×29 矩阵）。
+4. **自研 json.lua**：decode/encode，\u 代理对→UTF-8，主机 roundtrip 测试过。
+5. **api.lua**：auth store（/mnt/us/weread/data/auth.json）/cookie 注入/Set-Cookie 合并/gateway Bearer/401×3 重试（插件同款）。
+6. **auth.lua**：QR 登录全流程——getLoginUid→QR 屏（fb 块渲染+量化）→0.5s 轮询（Back 取消/过期自动重取 uid 重画）→userInfo→apikeyGet→存盘；NEED_OTP 给出明确指引（K4 暂不支持验证码输入）。
+7. **wrmain** 加全局 arg 表（标准 Lua 语义）；deploy 脚本全量 lua 推送、BIN 默认 weread-dyn。
+
+### 真机验证（PASS 11/11）
+
+- MD5 已知向量 abc/空串、sign/e 格式、cookie 合并、json 往返
+- **getLoginUid 返回真实 uid**（登录链路无凭据可调，TLS+JSON+头全通）
+- gateway 无 key 本地守卫、userInfo 未登录 401 结构化
+- **QR 屏渲染 finder 像素自检 PASS**（黑块确凿，屏显 5s）
+- api_smoke 首败两例：arg[1] 是脚本路径（标准 arg 语义）→ 遍历判断；QR 采样点忘加 quiet 偏移 → 修
+
+### 下一步
+
+用户实际扫码登录（屏上 QR + 手机微信）→ 登录态拉书架（gateway /shelf/sync）→ shelf.lua/download.lua/reader.lua（方案 §五 DK-2 余项）。扫码前需确认账号已开通微信读书 Skill。
+
 ## 2026-11-19 · DK-1 完成确认 + DK-2 网络层打通（动态变体 + 复用多看 libcurl TLS PASS）
 
 **用户确认**：DK-1 交互之前已验证——DK-1 全部完成。
