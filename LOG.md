@@ -1,5 +1,67 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-19 · git 历史改写：从全部提交中清除内网设备地址（force push 已获授权）
+
+**目标**：用户指示「用 git filter-repo 清除历史里的旧 IP 并 force push」。上一批只清了 HEAD，
+已公开的历史提交里设备地址真值仍在（199 处命中）。
+
+### 动作
+
+1. **范围审计**：`git grep` 全历史扫 RFC1918 模式 → 只有一个内网地址、199 处、跨 38 个提交；
+   没有第二个内网 IP。
+2. **先备份**：`git bundle create /home/doro/backups/WereadK4_BasedDK-pre-filter-20261119.bundle --all`
+   + `git bundle verify`（"records a complete history"，170K）。改写不可逆，回退全靠它。
+3. **不在工作仓里跑 filter-repo**：`vendor/`（61M 多看资产）、`build/`（16M）、`handoffs/`（196K）、
+   `tools/k4-env.local.sh` 都是 gitignore 的不可再生本机资产，而 filter-repo 收尾会 reset/gc——风险不值得。
+   改在 `git clone --no-local` 出的临时仓里跑（第一次漏了 `--no-local`，被 filter-repo 拒：本地 clone 不算 fresh clone）。
+4. **替换规则**：`--replace-text`，单行「真值`==><K4_HOST>`」（filter-repo 默认按字面匹配，无需 `literal:` 前缀）；
+   占位符与 HEAD 现行写法一致，历史条目读起来仍通顺。真值本身只存在于本机 `tools/k4-env.local.sh`，不写进本文件。
+5. **改写后逐项验证**（见「验证」），确认无误才动工作仓。
+6. **工作仓换头**：`git fetch <临时仓> refs/heads/main` + `git checkout -B main FETCH_HEAD`
+   —— tracked 内容零变化（HEAD tree hash 不变），ignored 资产完好（vendor/build/handoffs 尺寸复核一致）。
+7. **推送**：`git push --force-with-lease=refs/heads/main:<改写前 SHA>`——lease 钉住审计过的远端状态，
+   远端若被别人动过就拒绝，比裸 `--force` 安全。第 1 次尝试即成功（代理这轮没抽风）。
+8. **本地清尾**：`git reflog expire --expire=now --all && git gc --prune=now` → 旧对象（含真值）从本机仓库消失
+   （`git cat-file -t <旧SHA>` 报 not found）；临时 clone 与替换表文件删除。
+9. **修复被改写打断的 SHA 引用**：历史改写让所有 SHA 变号，`AGENTS.md`/`LOG.md` 里 17 处引用会指向不存在的提交。
+   从备份 bundle 取旧历史，按 subject 逐条对齐（38↔38，`diff` 全等）建映射，精确替换 12 个被引用的 SHA；
+   `docs/` 里那个 7 位十六进制的固件 SHA-256 前缀（`07a2238…`）不在映射表内，未被误伤。
+   `AGENTS.md` 的指针行顺手去掉钉死的 SHA（每提交都过时，这次改写正好证明它脆弱）。
+
+### 旧→新 SHA 映射（引用旧号的笔记/交接按此换算）
+
+| 旧 | 新 | 提交 |
+|---|---|---|
+| af3c702 | 247d897 | DK-3 输入层: ScreenKB 修饰键 latch |
+| 216a6d8 | 2e7054e | DK-3 进度存储: progress.lua + Json.write_atomic |
+| 0df7c75 | ab517c6 | DK-3 下载侧: 按需补章 + 批量预取 |
+| d88bdbf | b3e28a2 | DK-3 阅读器: 键位对齐 + 跨章 action 信号 |
+| a42d1cf | 2ad8908 | DK-3 菜单: read_book 循环 + 目录 + 续读 |
+| fa69a41 | da53ffc | DK-3 验收: dk3_smoke.lua |
+| a5e6b61 | 76c85c3 | DK-3 文档: keymap-k4.md + LOG |
+| 07a7561 | a630b2f | AGENTS.md: handoff 指针 → dk3 kit |
+| f5bc76f | ec914a2 | AGENTS.md: 状态更新（远端已建） |
+| 9672af5 | 3101774 | 公开仓库卫生整改 |
+| 9a8b1e9 | d7cbf42 | LOG: 公开发布批次 |
+| 147c543 | cc213b1 | DK-2 后半: download/reader/menu 级联 |
+
+### 验证
+
+- 改写仓：全历史 `git grep` 内网网段零命中；**HEAD tree hash 与改写前逐字节相同**（`8e1d6b3c…`）→ 发布内容未被动；
+  38 提交、subject 列表、author/date 列表与原历史 `diff` 全等；138 个 blob 落上 `<K4_HOST>` 占位符。
+- 远端：`git ls-remote origin` = `d7cbf42` = 本地 HEAD；`gh api commits?per_page=100` = 38；
+  `forks=0 / watchers=0`（无派生仓残留旧历史）。
+- 引用修复后：12 个旧 SHA 全仓 `git grep` 零命中；12 个新 SHA 逐个 `git log -1 --format=%s` 与预期主题一致。
+- 回归：`make host-selftest`（HOST-OK + INPUT-OK）、`make host-lua-test`（3 套件 0 failure）。
+
+### 状态 / 残留
+
+- **GitHub 侧仍可按旧 SHA 直取**：`gh api repos/.../commits/<旧SHA>` 仍返回 200——force push 只改分支可达性，
+  悬空对象要等 GitHub 自己的 GC。要立刻彻底清除需联系 GitHub Support，或删仓重建
+  （本仓 forks=0、watchers=0、无 issue/PR，删重建代价很低）。
+- 备份 bundle 在 `/home/doro/backups/`（含改写前完整历史与设备地址真值）——**本机 only，勿上传**。
+- 设备仍离线，DK-3 真机验收继续阻塞。
+
 ## 2026-11-19 · 公开发布 + 公开仓库卫生整改（设备仍离线）
 
 **目标**：用户两条指示——①「本机已有 GH 授权，直接推送为项目，公开」；②「执行 1 和 2」
@@ -17,13 +79,13 @@
    HTTP CONNECT 返回 503（约 15s 后）或 TLS 中途被断（`GnuTLS recv error (-110)`），
    socks5h 也只偶发成功，直连超时；而 `api.github.com` 稳定 200（所以 `gh` 能用）。
    连续 ~20 次失败后**重试即通**——不改配置，只循环重试（写法已记进 handoff 的 Blocker 段）。
-3. **指针状态更新**（f5bc76f）：`AGENTS.md` 原文「git push（仓库无 remote）双阻塞」在公开后成了假信息，
+3. **指针状态更新**（ec914a2）：`AGENTS.md` 原文「git push（仓库无 remote）双阻塞」在公开后成了假信息，
    补 Remote 行并把 Status 改为「仅剩设备阻塞」。
-4. **设备地址移出仓库**（9672af5）：`deploy-k4.sh` / `deploy-weread.sh` 改为
+4. **设备地址移出仓库**（3101774）：`deploy-k4.sh` / `deploy-weread.sh` 改为
    「环境变量 > `tools/k4-env.local.sh` > 报错退出」，删掉硬编码默认值；新增 `tools/k4-env.example.sh`
    （只有变量名与占位符）；`tools/k4-env.local.sh` 进 `.gitignore`；
    `AGENTS.md`/`LOG.md`/`dk3_smoke.lua` 里的字面 IP 换成 `$K4_HOST` / `<K4_HOST>`。
-5. **本机文档引用标注 local-only**（9672af5）：README 增「构建与部署」段（明说不入库的构建依赖：
+5. **本机文档引用标注 local-only**（3101774）：README 增「构建与部署」段（明说不入库的构建依赖：
    `~/x-tools` 交叉工具链、`vendor/`、`~/k4-sysroot`，以及设备地址配置步骤）；
    `Current Handoff` 段改为说明 `handoffs/` 本地 only；`docs/duokan-k4-driver-architecture.md`
    证据源表下加注（表内路径均为本机材料，结论已抄进文档，读者不需要原文件）。
@@ -41,7 +103,7 @@
 
 ### 状态
 
-- 2 个提交（f5bc76f、9672af5）+ 本条 LOG。仓库 https://github.com/dororo42/WereadK4_BasedDK 已公开。
+- 2 个提交（ec914a2、3101774）+ 本条 LOG。仓库 https://github.com/dororo42/WereadK4_BasedDK 已公开。
 - 设备仍离线（`.151` ARP FAILED、ping 不通；未做全网段端口扫描——被安全策略拦下，也不该扫）。
   → `dk3_smoke.lua` 真机验收与键位手感验收**继续阻塞**，仍是 DK-3 唯一未了结项。
 
@@ -57,22 +119,22 @@
    `README.md:70-88`：`Left/Right`=换章、`LPgFwd/RPgFwd`=下一页、`LPgBack/RPgBack`=上一页、
    `Press`=底部菜单、`Menu`=顶部菜单、`Back`=关闭、`Home`=书架、`ScreenKB+Up`=目录。
    我们 DK-2 的 reader 把 `Right/Down/Press` 当翻页、四个 bezel 翻页键一个没绑——直接冲突。
-2. **C 层修饰键 latch**（af3c702）：`wr_input_poll` 原本丢弃 release，Lua 侧看不到修饰键抬起。
+2. **C 层修饰键 latch**（247d897）：`wr_input_poll` 原本丢弃 release，Lua 侧看不到修饰键抬起。
    latch 放 C（键位语义本来就在 `input.c` 决策，不下沉 Lua 造成分裂），产出 KOReader 同款
    `ScreenKBPlus<Key>`；latch 挂 `struct wr_input`（跨设备：code 29 在 event0，D-pad 在 event1），
    且排在通用 release 过滤之前（否则抬起被丢 → 修饰键粘住）。主机自测 `WR_INPUT_TEST_MAIN`。
-3. **进度存储**（216a6d8）：`lib/progress.lua`（原子写、损坏降级为空、book_id 一律 tostring 作键）；
+3. **进度存储**（2e7054e）：`lib/progress.lua`（原子写、损坏降级为空、book_id 一律 tostring 作键）；
    顺手把 `api.lua:save_auth` 里手写的 tmp+rename 抽成 `Json.write_atomic` 共用（消除重复）。
-4. **下载侧**（0df7c75）：`is_spooled`（空文件不算缓存）/`chapter_pos`+`find_chapter`
+4. **下载侧**（ab517c6）：`is_spooled`（空文件不算缓存）/`chapter_pos`+`find_chapter`
    （服务端 chapterIdx 不连续，与数组下标不能混用）/`new_session`+`ensure_chapter`
    （psvts 每书抽一次、懒取；命中缓存零网络请求）。**不做批量预取**：单进程无异步，
    预取只是把同样的等待提前到开书时（拖慢首页），改为章切换时按需下载 + 「准备章节」屏。
-5. **阅读器**（d88bdbf）：键位表导出为 `Reader.KEY_*` 模块字段（改键位不动控制流，且可主机单测钉住）；
+5. **阅读器**（b3e28a2）：键位表导出为 `Reader.KEY_*` 模块字段（改键位不动控制流，且可主机单测钉住）；
    跨章动作以 `action` 信号交回调用方；`start_page` 负数 = 从末页开始（回退上一章用）。
-6. **菜单**（a42d1cf）：`read_book` = 全项目唯一跨章决策点（目录→进度起点→按需取章→渲染→
+6. **菜单**（2ad8908）：`read_book` = 全项目唯一跨章决策点（目录→进度起点→按需取章→渲染→
    每次离章即 `Progress.set`→按 action 分派）；`pick_chapter` 目录列表（末项「退出阅读」，
    快捷菜单与目录共用一屏）；「继续阅读」接 `Progress.get_last()`。
-7. **验收**（fa69a41）：`dk3_smoke.lua` 用 `count_calls()` 包装 `fetch_psvts`/`fetch_chapter_text`
+7. **验收**（da53ffc）：`dk3_smoke.lua` 用 `count_calls()` 包装 `fetch_psvts`/`fetch_chapter_text`
    计数，直接断言「重跑 0 次网络请求」，不用计时阈值猜测。
 8. **文档**：`docs/keymap-k4.md`（对齐表 + 两处刻意偏离 + 组合键实现 + 未接绑定的组合键清单）。
 
@@ -87,7 +149,7 @@
 
 ### 状态
 
-- 6 个提交（af3c702 → fa69a41）。推送仍阻塞：仓库无 remote，需用户给远端地址。
+- 6 个提交（247d897 → da53ffc）。推送仍阻塞：仓库无 remote，需用户给远端地址。
 - 两处刻意偏离（`Up/Down` 降级为翻页、`Press` 保留翻页）均一行可翻转，
   `tests/reader_keys_test.lua` 会强制同步断言——真机手感不对时改这两处即可。
 
@@ -127,7 +189,7 @@
    自编译不省 TLS 大坑；网络层失效预案 runbook 化（weread TLS 握手失败=唯一触发信号）。
    多看自有组件（KindleApp/dkkernel）判死维持——复用甜点区=OSS 成品运行库+字体数据。
 2. **handoff** `dk2-download-reader-code-ready`（READY）：DK-2 后半代码完成（download/reader/menu
-   级联，147c543），download_smoke 待设备恢复；上份交接三项全部给出结局；设备离线 blocker 记录。
+   级联，cc213b1），download_smoke 待设备恢复；上份交接三项全部给出结局；设备离线 blocker 记录。
 
 ### 状态
 

@@ -11,8 +11,10 @@
 ## Current Handoff
 
 - Latest: `handoffs/2026-11-19-111648-dk3-reading-keys-resume/HANDOFF.md`
-- Branch: main @ 07a7561（DK-3 阅读侧 6 个提交 af3c702→a5e6b61 已落地；指针快照可能滞后，以 git log 为准）
-- Remote: `origin` = https://github.com/dororo42/WereadK4_BasedDK （**public**，35 commits 已推送）
-- Status: 代码就绪且已公开推送；仅剩设备阻塞——真机验收（dk3_smoke + 键位手感）待 K4 上线
+- Branch: main（DK-3 阅读侧 6 个提交 247d897→76c85c3 已落地。**不钉 SHA**：2026-11-19 做过一次历史改写，
+  改写前的所有 SHA 已失效，一律以 `git log` 为准）
+- Remote: `origin` = https://github.com/dororo42/WereadK4_BasedDK （**public**，38 commits）
+- Status: 代码就绪且已公开推送、历史已清洗（内网设备地址从全部提交中移除）；
+  仅剩设备阻塞——真机验收（dk3_smoke + 键位手感）待 K4 上线
 
 任何 agent 开始工作前，先读上面的 HANDOFF.md。这份指针由 orbital_handoff 维护，手工交接时请同步更新。
