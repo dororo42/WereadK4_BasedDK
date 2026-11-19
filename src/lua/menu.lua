@@ -5,16 +5,25 @@
 -- 交互：Up/Down 移动，中键(Press) 选择，Back/Menu/Home 退出。
 -- SMOKE=true 时只渲染一帧 + 像素自检（采样字形区最小灰度）即退出（自动化验收）。
 
+package.path = "/mnt/us/weread/lua/lib/?.lua;/mnt/us/weread/lua/?.lua;" .. package.path
+
+local Api = require("api")
+local Auth = require("auth")
+local Shelf = require("shelf")
+
 local FONT_PATH = os.getenv("WR_FONT") or "/mnt/us/weread/fonts/wqy-microhei.ttc"
 
-local items = {
-    "继续阅读",
-    "书架",
-    "搜索",
-    "同步进度",
-    "设置",
-    "退出",
-}
+-- 菜单项随登录态变化（shelf/阅读在登录后可用）
+local function build_items()
+    if Api.has_login() then
+        local auth = Api.load_auth()
+        local name = tostring(auth.account.name or auth.account.user_vid or "已登录")
+        return { "继续阅读", "书架", "同步进度", "设置", "退出" }, name
+    end
+    return { "登录", "书架(需登录)", "设置", "退出" }, nil
+end
+
+local items, account_name = build_items()
 
 local sel = 1
 local running = true
@@ -45,8 +54,11 @@ local function text(x, y, s, fg, font_id)
 end
 
 local function draw()
+    items, account_name = build_items()
+    if sel > #items then sel = #items end
     wr.fb_fill(0, 0, W, H, 0xFF)                            -- 白底
-    text(16, 14, "微信读书 K4", 0x00, ft_main)              -- 标题
+    local title = "微信读书 K4" .. (account_name and ("  " .. account_name) or "")
+    text(16, 14, title, 0x00, ft_main)                      -- 标题（含账号名）
     wr.fb_fill(16, 14 + TITLE_H, W - 32, 2, 0x00)           -- 分隔线
 
     for i, name in ipairs(items) do
@@ -120,6 +132,29 @@ if not SMOKE then
         elseif key == "Press" then
             if items[sel] == "退出" then
                 running = false
+            elseif items[sel] == "登录" then
+                local account, lerr = Auth.login(
+                    function(url) Auth.draw_login_screen(url, "微信扫码登录", "手机微信扫码 · Back 取消") end,
+                    function(msg) Auth.clear_screen(msg) end)
+                if account then
+                    Auth.clear_screen("登录成功: " .. tostring(account.name or account.user_vid))
+                    local t0 = wr.millis()
+                    while wr.millis() - t0 < 1500 do end
+                else
+                    Auth.clear_screen("登录未完成: " .. tostring(lerr):sub(1, 50))
+                    local t0 = wr.millis()
+                    while wr.millis() - t0 < 2500 do end
+                end
+                sel = 1
+                draw()
+            elseif items[sel] == "书架" then
+                sel = 1
+                local book_id, book = Shelf.run()
+                if book_id then
+                    assert(wr.fb_open(), "fb_open failed")
+                    show("阅读器开发中: " .. tostring(book.title or book_id))
+                end
+                draw()
             else
                 show("已选择: " .. items[sel])
             end

@@ -115,7 +115,8 @@ function Parser:lit(word, val)
 end
 
 function Parser:num()
-    local _, e, num = find(self.s, "^-?%d+%.?%d*[eE]?[+-]?%d*", self.i)
+    -- 必须带捕获组：Lua 5.1 的 find 无捕获时只返回 (s,e)，第三返回值恒为 nil
+    local _, e, num = find(self.s, "^(-?%d+%.?%d*[eE]?[+-]?%d*)", self.i)
     if not e or e < self.i then
         return nil, "json.decode: bad number at " .. self.i
     end

@@ -33,9 +33,11 @@ local c = Cookie.merge_set_cookie({}, "wr_vid=12345; Path=/; Domain=.weread.qq.c
 check("cookie.merge", c.wr_vid == "12345")
 check("cookie.login_check", not Cookie.has_login_cookie({ wr_vid = "abc" }) == false or true)
 
--- 5) json 往返
-local round = Json.decode(Json.encode({ books = { { bookId = "330002807" } }, succ = true }))
-check("json.roundtrip", round.books[1].bookId == "330002807" and round.succ == true)
+-- 5) json 往返（含数字值——webLoginVid 类大整数是登录凭据，曾因 find 无捕获组丢值）
+local round = Json.decode(Json.encode({ books = { { bookId = "330002807" } }, succ = true, n = 32819470 }))
+check("json.roundtrip", round.books[1].bookId == "330002807" and round.succ == true and round.n == 32819470)
+local nums = Json.decode('[-3.5,1e3,0]')
+check("json.numbers", nums[1] == -3.5 and nums[2] == 1000 and nums[3] == 0)
 
 -- 6) 真实网络（登录前链路）：getLoginUid → 应返回 uid（无凭据可调）
 local data, status = Api.request({ url = Api.BASE_URL .. "/api/auth/getLoginUid", timeout = 20 })

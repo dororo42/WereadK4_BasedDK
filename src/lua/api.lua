@@ -95,7 +95,9 @@ function Api.request(opts)
     end
 
     auth.cookies = merge_cookies(auth.cookies, resp_headers)
-    Api.save_auth(auth)
+    if not opts.no_save then
+        Api.save_auth(auth)
+    end
 
     if opts.raw then
         return body, status, resp_headers
