@@ -1,5 +1,50 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-19 · 公开发布 + 公开仓库卫生整改（设备仍离线）
+
+**目标**：用户两条指示——①「本机已有 GH 授权，直接推送为项目，公开」；②「执行 1 和 2」
+（= 我报告的三点公开可见项里的前两点：内网设备地址、指向本机 `~/reports/` 的死引用；第三点 LICENSE 留给用户决定）。
+
+### 动作
+
+1. **发布前审计**（推送会把 35 个提交全部公开，先审后推）：tracked 文件清单逐个过（50 个，全是源码/文档/测试/工具）；
+   枚举历史上曾 add 过的所有路径——无 `auth.json`、无 `vendor/`、无 `handoffs/`、无二进制；
+   全历史密钥正则扫描（`wr_skey=`/`wr_vid=`/`api_key=`/PRIVATE KEY/`ghp_`/`ssh-rsa`/`password=`）零命中；
+   `WeRead.DEFAULT_READER_TOKEN`（`src/lua/lib/protocol.lua:18`）与公开上游插件
+   `weread.koplugin/weread/lib/protocol.lua:7` 逐字节相同 → 是上游硬编码值，不是用户凭据。
+2. **建仓并推送**：`gh repo create WereadK4_BasedDK --public --source=. --remote=origin --push`。
+   仓库建成但 push 失败——本机 gost 代理（127.0.0.1:10800）对 `github.com:443` 不稳：
+   HTTP CONNECT 返回 503（约 15s 后）或 TLS 中途被断（`GnuTLS recv error (-110)`），
+   socks5h 也只偶发成功，直连超时；而 `api.github.com` 稳定 200（所以 `gh` 能用）。
+   连续 ~20 次失败后**重试即通**——不改配置，只循环重试（写法已记进 handoff 的 Blocker 段）。
+3. **指针状态更新**（f5bc76f）：`AGENTS.md` 原文「git push（仓库无 remote）双阻塞」在公开后成了假信息，
+   补 Remote 行并把 Status 改为「仅剩设备阻塞」。
+4. **设备地址移出仓库**（9672af5）：`deploy-k4.sh` / `deploy-weread.sh` 改为
+   「环境变量 > `tools/k4-env.local.sh` > 报错退出」，删掉硬编码默认值；新增 `tools/k4-env.example.sh`
+   （只有变量名与占位符）；`tools/k4-env.local.sh` 进 `.gitignore`；
+   `AGENTS.md`/`LOG.md`/`dk3_smoke.lua` 里的字面 IP 换成 `$K4_HOST` / `<K4_HOST>`。
+5. **本机文档引用标注 local-only**（9672af5）：README 增「构建与部署」段（明说不入库的构建依赖：
+   `~/x-tools` 交叉工具链、`vendor/`、`~/k4-sysroot`，以及设备地址配置步骤）；
+   `Current Handoff` 段改为说明 `handoffs/` 本地 only；`docs/duokan-k4-driver-architecture.md`
+   证据源表下加注（表内路径均为本机材料，结论已抄进文档，读者不需要原文件）。
+6. **未做**：git 历史重写。IP 与旧引用仍存在于**已公开的历史提交**里，从 HEAD 清掉不等于从历史清掉；
+   清历史要 `filter-repo` + force push（或删仓重建），属不可逆操作 → 交用户决定。
+
+### 验证
+
+- 审计：`git ls-tree -r --name-only origin/main` 敏感路径扫描（handoff/auth.json/vendor/*.so/*.zip/*.pem/.env）零命中。
+- 整改：`git grep` 内网网段正则（`192.168.` 段全模式）全仓零命中；`git check-ignore -v tools/k4-env.local.sh` 命中 `.gitignore:12`；
+  `bash -n` 两脚本通过；**用 stub ssh/scp 跑三种配置情形**——本机文件被 source、`K4_HOST`/`K4_PORT` 环境变量覆盖生效、
+  两者皆无时报出带指引的错误（测行为不测实现）；`luac -p dk3_smoke.lua` 通过。
+- 回归：`make host-selftest`（HOST-OK + input combo selftest OK）、`make host-lua-test`（3 套件 0 failure）全绿。
+- 远端：`git rev-parse HEAD` == `origin/main`；仓库 public。
+
+### 状态
+
+- 2 个提交（f5bc76f、9672af5）+ 本条 LOG。仓库 https://github.com/dororo42/WereadK4_BasedDK 已公开。
+- 设备仍离线（`.151` ARP FAILED、ping 不通；未做全网段端口扫描——被安全策略拦下，也不该扫）。
+  → `dk3_smoke.lua` 真机验收与键位手感验收**继续阻塞**，仍是 DK-3 唯一未了结项。
+
 ## 2026-11-19 · DK-3 阅读侧：键位对齐 KOReader 习惯 + 批量下载 + 断点续读（设备仍离线）
 
 **目标**：用户两条要求——① 继续 DK-3（阅读侧优先、章末自动续读）；② 参考 weread_K4 插件快捷键，
