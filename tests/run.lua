@@ -8,6 +8,7 @@ math.randomseed(os.time())
 local suites = {
     "progress_test",
     "download_pure_test",
+    "reader_keys_test",
 }
 
 local total = 0
