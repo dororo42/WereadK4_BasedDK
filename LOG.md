@@ -1,5 +1,54 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-19 · 两处「注释里的规则」被测试拆穿：position_of 与参照实现差分、Api.request 就地合并反向放行
+
+**目标**：继续测试。设备在线窗口先跑掉 Q3（见下一条），剩下的时间给「主机侧一直没被钉住的
+生产面」——挑的不是新功能，而是**只有注释在守、没有断言在守**的地方。
+
+### 动作
+
+1. **先问「期望值是谁算的」**：`report_position_test.lua` 11 组全绿，但每条期望都是我手算的。
+   手算只证明「符合我对公式的理解」，证明不了「符合参照实现」——而本仓与插件写的是服务端
+   **同一组 co/pr**，标定又证明服务端原样存、不从 co 反推 pr，两边一旦漂移，用户在插件与本
+   客户端之间切换就会被写偏位置。
+   于是新增第 8 套 `tests/position_golden_test.lua`：期望值由 `lua5.1` 直接调用插件
+   `position_mapper.local_to_remote()` 产出（`tools/gen_position_golden.lua` 生成
+   `tests/position_golden_vectors.lua`，重跑逐字节一致，provenance 可复现）。
+   4 本目录形态 × 页码网格 = **agree 323 点 + plugin_refused 34 点 + gated 60 点**。
+2. **三类行判据分开，刻意漂移要写成正向断言**：参照实现对 `words<=0` 的章直接报错，本仓
+   **刻意继续**（前言/空白章不该让整本停止更新）——这条差异如果不钉住，下一个人「对齐插件」
+   就会把它改回去。所以钉两点：该章偏移必须恒为 0（words=0 ⇒ 章内不可能推进）、
+   同章跨页 percent 必须不变。gated 行仍带着参照实现当时会算出的 off/pct，作为
+   「我们**没有**把哪个错误位置发出去」的证据。
+3. **第 9 套 `tests/api_jar_test.lua` 一跑就红，而且红得比预想严重**：`Api.request` 里
+   「已有会话只接受合并后仍是可用会话的 2xx」这条规则被自己的实现拆穿了——
+   `Cookie.merge_set_cookie` 是**就地**改传入表（空值=删除），`merged` 与 `auth.cookies`
+   是同一个引用。收到 `wr_skey=` 时先被掏空的是调用方那份活 jar，于是
+   `not has_login_cookie(auth.cookies)` 变成 true，门禁把「会话刚被清空」读成
+   「本来就没会话、不受此限」→ **掏空后的 jar 原样落盘**。后果正是用户明令禁止的那条：
+   登录态没了只剩扫码（有风控风险）。
+4. **修法用同一条边界纪律，不新增写入口**：合并前先 `Cookie.sanitize` 出一份新表（与加载期
+   同款），判定用改前那份 jar；顺带治第二个缺陷——新增 `Cookie.equal`，只在合并结果与原 jar
+   **不相等**时才写盘。此前每个 2xx 响应都重写一次 auth.json：磨闪存，而且「谁在什么时候改了
+   凭据」根本无从回答。写入口计数仍是 `CRED-WRITERS-OK (3)`。
+5. **8 场景先红（4 FAIL）再修；变异验证三条判据都咬得住**：改回就地合并 = 8 FAIL；
+   `jar_usable` 强行 true = 场景 1 FAIL；删掉 changed-only 条件 = 场景 8 FAIL；
+   位置差分：round→floor = 149 FAIL、删拒发线 = 60 FAIL、照参照实现那样对 words<=0 拒答 = 68 FAIL。
+   每次都 md5 核对还原。**操作教训**：我用 `git checkout --` 当变异还原手段，把还没提交的
+   修复冲掉了一次（HEAD 里没有它）——未提交的改动只能 `cp` 出副本再还原。
+
+### 验证
+
+主机 `make host-lua-test` = **9 套绿** + `CRED-WRITERS-OK (3)`；`make host-selftest` = HOST-OK + INPUT-OK。
+真机（`api.lua`/`cookie.lua` 两端 md5 对账后部署）：`dk3_smoke` 0 failure、`renew_smoke` 0 failure
+（force→`replaced`、`wr_rt` 28 未丢、第二次被冷却挡住）、`read_report_smoke` 0 failure
+（`co=1908 pr=96` 回读逐字节相同、`jar items 6->6 header_unchanged=true`）。全程未扫码。
+
+### 状态
+
+`origin/main` 之上待推：5883e75（位置差分套件）、5ed52cb（会话合并门禁修复）+ 本条 LOG。
+仍未观测的路径不变：`Auth.renew` 的真实 `expired` 分支——**在它被观测之前不要把 expired 接回扫码**。
+
 ## 2026-11-19 · DK-3.5 阅读上报落地：签名面真机被收下，位置逐字节落盘（零位移验收）
 
 **目标**：设备在线而键位验收需要人，就趁这个窗口把 DK-3 之后唯一不需要人按键的项做完——
