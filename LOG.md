@@ -1,5 +1,46 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-19 · 真机验收跑绿：续期=replaced、正文可用；并更正「设备离线」是我的探测写错
+
+**目标**：用户指出「真机一直在线」，把持久化批次唯一未取证的一项（免扫码续期真机复测）跑完，
+顺手清掉本会话遗留在设备上的探测脚本。
+
+### 动作
+
+1. **前提更正（这是本批最重要的发现）**：`tools/k4-env.local.sh` 里 `K4_HOST` 的值已含
+   `root@` 前缀，所以我用来判「在线/掉线」的 `bash -c 'exec 3<>/dev/tcp/$K4_HOST/$K4_PORT'`
+   打的是 `/dev/tcp/root@192.168.2.151/2222` —— 无效目标，稳定报 `No route to host`，
+   被我当成设备离线，还挂了个 10 分钟的轮询监视器去「等它上线」。改用 `ssh -o ConnectTimeout`
+   一试就到了认证阶段，设备一直在线。
+   另一面也要分清：本批更早的 `ssh` 确实真失败过，设备 dmesg 里
+   `Battery: Resume - TimeSuspended(secs)=2435` 印证它真睡了约 40 分钟。**两种「连不上」原因不同，
+   判据只能是 ssh 本身走到哪一步**（路由不通 / 认证失败 / 通了）。
+2. 先按纪律备份：`auth.json` → `auth.json.bak-recheck`（数据目录现共 3 份备份，都在设备上）。
+3. `tools/deploy-weread.sh` → `PIXEL-CHECK PASS`、`EXIT=0`（Lua 层不内嵌在二进制里，
+   deploy 的 scp glob 就是分发路径，所以新增脚本无需重编）。
+4. `dk3_smoke.lua` → `0 failure(s)`：5/5 章有真实正文（bytes 17/293/3096/2946/2691，longest=3096），
+   缓存重跑 0 次网络调用。
+5. 新增并跑通正式验收件 `src/lua/renew_smoke.lua` → `0 failure(s)`：
+   `renew(force)` 回 **replaced**；`jar_items` 5→6（服务端补发 `wr_pf`）、`wr_skey` 仍 8 字符、
+   `wr_rt` 28 字符、**前后 `has_login` 都 true**；不带 force 的第二次 = `cooling`；
+   续期后走 t_0 取到 3030 字节正文。**门槛 16→8 的校准由真机确认，不再只是探测推断。**
+6. 清场（先验无凭据值再删）：9 个 `probe_*.lua`、`evsniff`、`data/poll_raw.json`、
+   `data/login_run.log`（`grep -ci token` = 0，只含已被消费掉的二维码 uid）。
+7. 提交 37f8cb9（renew_smoke + 真机证据写进 commit body）。
+
+### 验证
+
+- 设备侧三条命令全绿：`dk3 smoke: 0 failure(s)` / `renew smoke: 0 failure(s)` EXIT=0 / `PIXEL-CHECK PASS`。
+- 主机侧未回归：`make host-lua-test` → 5 套 + `CRED-WRITERS-OK (3)`；`make host-selftest` 绿。
+- 全程**未触发扫码**，登录态未被破坏（这正是本批要证明的不变量）。
+
+### 状态
+
+DK-3 只剩一项：键位手感交互验收（`tools/deploy-weread.sh --interactive`，需要人在设备边按键；
+重点验 ScreenKB 组合键与 code 29 是否报 release）。本批 + 上批的提交仍未 push，等用户点头。
+下一批的可达性判据请直接用 ssh，别再拿 `/dev/tcp/$K4_HOST` 当探针。
+
+
 ## 2026-11-19 · 免扫码续期 + 会话持久化（照 weread_K4 插件补齐登录生命周期）
 
 **目标**：用户指示「不要扫码，可能触发风控，需要参考原 weread_K4 插件，做好登录的持久化」。
