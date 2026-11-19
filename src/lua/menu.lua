@@ -3,6 +3,7 @@
 -- 字体：vendor/duokan/fonts/wqy-microhei.ttc（多看固件抽取，GPLv2+FE，见 vendor/duokan/README.md）。
 -- 缺字体文件时自动回退 step1 点阵路径（英文）——功能不劣化。
 -- 交互：Up/Down 移动，中键(Press) 选择，Back/Menu/Home 退出。
+-- 阅读态键位（翻页/换章/目录）见 docs/keymap-k4.md，声明在 reader.lua 的键位表里。
 -- SMOKE=true 时只渲染一帧 + 像素自检（采样字形区最小灰度）即退出（自动化验收）。
 
 package.path = "/mnt/us/weread/lua/lib/?.lua;/mnt/us/weread/lua/?.lua;" .. package.path
@@ -12,6 +13,8 @@ local Auth = require("auth")
 local Shelf = require("shelf")
 local Download = require("download")
 local Reader = require("reader")
+local Progress = require("progress")
+local WeRead = require("protocol")
 
 local FONT_PATH = os.getenv("WR_FONT") or "/mnt/us/weread/fonts/wqy-microhei.ttc"
 
@@ -82,8 +85,9 @@ local function draw()
     wr.fb_refresh(0)   -- partial 不闪
 end
 
--- 选中非 Exit 项：显示提示，等任意键回到菜单
-local function show(msg)
+-- 选中非 Exit 项：显示提示，等任意键回到菜单。
+-- keep_screen=true 时不重绘主菜单（调用方随后自己 draw，省掉一次 eink 刷新）。
+local function show(msg, keep_screen)
     wr.fb_fill(0, 0, W, H, 0xFF)
     text(16, 14, "微信读书 K4", 0x00, ft_main)
     wr.fb_fill(16, 14 + TITLE_H, W - 32, 2, 0x00)
@@ -96,7 +100,148 @@ local function show(msg)
     wr.fb_quant()
     wr.fb_refresh(0)
     while wr.input_poll(-1, true) == nil do end
-    draw()
+    if not keep_screen then draw() end
+end
+
+-- 列表标签截断（UTF-8 安全，用 protocol.utf8_substr）：章节标题可能长于一行
+local function clip(s, n)
+    s = tostring(s or "")
+    if #s <= n then return s end
+    local head = WeRead.utf8_substr(s, n)
+    if #head < #s then head = head .. "…" end
+    return head
+end
+
+-- 目录列表：Up/Down 移动，Left/Right 翻屏，Press 跳转，Back 取消（与 shelf 同款导航）。
+-- 末项固定「退出阅读」——快捷菜单(Menu / ScreenKB+Down)与目录(ScreenKB+Up)共用这一屏，
+-- 不再多造一层菜单。返回 chapterIdx | "exit" | nil(取消)
+local function pick_chapter(chapters, cur_idx)
+    local ROWS = math.max(1, math.floor((H - Y0 - 56) / ITEM_H))
+    local n = #chapters + 1
+    local pos = Download.chapter_pos(chapters, cur_idx) or 1
+    local pg = math.floor((pos - 1) / ROWS)
+    local pages = math.max(1, math.ceil(n / ROWS))
+
+    local function draw_toc()
+        wr.fb_fill(0, 0, W, H, 0xFF)
+        text(16, 14, "目录", 0x00, ft_main)
+        wr.fb_fill(16, 14 + TITLE_H, W - 32, 2, 0x00)
+        local first = pg * ROWS
+        for i = 1, ROWS do
+            local idx = first + i
+            if idx > n then break end
+            local y = Y0 + (i - 1) * ITEM_H
+            local label
+            if idx <= #chapters then
+                local ch = chapters[idx]
+                label = clip(string.format("%s%d. %s",
+                    ch.chapterIdx == cur_idx and "> " or "", ch.chapterIdx, ch.title), 20)
+            else
+                label = "退出阅读"
+            end
+            if idx == pos then
+                wr.fb_fill(12, y - 6, W - 24, ITEM_H - 6, 0x00)
+                text(22, y, label, 0xFF, ft_main)
+            else
+                text(22, y, label, 0x00, ft_main)
+            end
+        end
+        if ft_small then
+            wr.fb_text_ft(ft_small, 16, H - 40,
+                string.format("%d/%d 屏 · %d 章 · 上下移动 左右翻屏 中键跳转 返回取消",
+                    pg + 1, pages, #chapters), 0x60)
+        end
+        wr.fb_quant()
+        wr.fb_refresh(0)
+    end
+
+    draw_toc()
+    while true do
+        local key = wr.input_poll(1000, true)
+        if key == "Up" then
+            pos = pos - 1; if pos < 1 then pos = n end
+            pg = math.floor((pos - 1) / ROWS); draw_toc()
+        elseif key == "Down" then
+            pos = pos + 1; if pos > n then pos = 1 end
+            pg = math.floor((pos - 1) / ROWS); draw_toc()
+        elseif key == "Left" then
+            pg = pg - 1; if pg < 0 then pg = pages - 1 end
+            pos = pg * ROWS + 1; draw_toc()
+        elseif key == "Right" then
+            pg = pg + 1; if pg > pages - 1 then pg = 0 end
+            pos = pg * ROWS + 1; draw_toc()
+        elseif key == "Press" then
+            if pos > #chapters then return "exit" end
+            return chapters[pos].chapterIdx
+        elseif key == "Back" or key == "Menu" or key == "Home" then
+            return nil
+        end
+    end
+end
+
+-- 阅读主循环：全项目唯一的跨章决策点（reader 只报 action，不持有目录）。
+-- 每次离开一章就 Progress.set 落盘 → Back/Home/断电都能续读；Progress 单一写者就在这里。
+local function read_book(book_id)
+    local chapters, cerr = Download.fetch_catalog(book_id)
+    if not chapters or #chapters == 0 then
+        show("目录加载失败: " .. tostring(cerr):sub(1, 40), true)
+        return
+    end
+
+    local rec = Progress.get(book_id)
+    local cur_idx = (rec and rec.chapter_idx) or chapters[1].chapterIdx
+    if not Download.find_chapter(chapters, cur_idx) then
+        cur_idx = chapters[1].chapterIdx   -- 进度指向的章已不在目录（下架/改版）→ 从头读
+    end
+    local page = (rec and rec.page) or 1
+    local sess = Download.new_session()    -- psvts 每本书只抽一次
+
+    while true do
+        local ch = Download.find_chapter(chapters, cur_idx)
+        Auth.clear_screen("准备章节: " .. clip(ch.title, 16))
+        -- body 不叫 text：外层 text() 是渲染helper，遮蔽它会让后续误用静默变成字符串拼接
+        local body, terr = Download.ensure_chapter(book_id, chapters, cur_idx, sess)
+        if not body then
+            show("章节下载失败: " .. tostring(terr):sub(1, 40), true)
+            return
+        end
+
+        local ret = Reader.open(body, ch.title, page)
+        if not ret then
+            show("阅读器打开失败", true)
+            return
+        end
+        Progress.set(book_id, cur_idx, ret.page, ch.title)
+
+        local pos = Download.chapter_pos(chapters, cur_idx)
+        if ret.action == "next_chapter" then
+            if pos >= #chapters then
+                show("已到最后一章", true)
+                return
+            end
+            cur_idx = chapters[pos + 1].chapterIdx
+            page = 1
+        elseif ret.action == "prev_chapter" then
+            if pos <= 1 then
+                page = 1                 -- 已是第一章：停在首页，不退出阅读
+            else
+                cur_idx = chapters[pos - 1].chapterIdx
+                page = -1                -- 负数 = 上一章末页（reader.lua 约定）
+            end
+        elseif ret.action == "toc" then
+            local pick = pick_chapter(chapters, cur_idx)
+            if pick == "exit" then
+                return
+            elseif pick then
+                cur_idx = pick
+                page = 1
+            else
+                page = ret.page          -- Back 取消 → 回到原页
+            end
+        else                             -- "exit"：Back / Home
+            return
+        end
+    end
 end
 
 draw()
@@ -151,22 +296,19 @@ if not SMOKE then
                 draw()
             elseif items[sel] == "书架" then
                 sel = 1
-                local book_id, book = Shelf.run()
+                local book_id = Shelf.run()
                 if book_id then
                     assert(wr.fb_open(), "fb_open failed")
-                    Auth.clear_screen("下载章节中: " .. tostring(book.title or book_id):sub(1, 24))
-                    local chapters, derr = Download.book(book_id, 1)
-                    local ch = chapters and chapters[1]
-                    if ch and not ch._err then
-                        local text = Download.read_chapter(book_id, ch.chapterIdx)
-                        if text then
-                            Reader.open(text, ch.title)
-                        else
-                            show("章节读取失败")
-                        end
-                    else
-                        show("下载失败: " .. tostring((ch and ch._err) or derr):sub(1, 40))
-                    end
+                    read_book(book_id)
+                end
+                draw()
+            elseif items[sel] == "继续阅读" then
+                local last = Progress.get_last()
+                if last then
+                    assert(wr.fb_open(), "fb_open failed")
+                    read_book(last)
+                else
+                    show("暂无阅读记录")
                 end
                 draw()
             else
