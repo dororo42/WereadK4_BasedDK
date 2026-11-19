@@ -1,5 +1,30 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-20 · 设备复跑：审查修复真机验收全绿（折行渲染/renew/dk3/菜单）
+
+**目标**：设备第四次上线，验证代码审查修复在真机上的行为。
+
+### 动作与结果
+
+1. **凭据先行备份**（硬约束）：auth.json.bak-review。
+2. **全量部署**（含审查修复版 reader/input/json）→ 菜单 SMOKE PASS。
+3. **dk3_smoke：0 failure(s)**——catalog 15 章、batch=5 章真实正文（2691-3096 字节）、
+   缓存命中不重下、进度回环——审查修复未破坏数据面。
+4. **🔴折行修复真机渲染验证**（新增 reader_render_smoke.lua）：真实章节（3300235630 ch3）
+   → Reader.layout（真 freetype 测量）→ 89 行布局回环 OK + 首页像素黑笔画 PASS。
+   排障注记：首轮回环 MISMATCH 是校验器假阳性（行中 tab 恰跨折行边界，逐行 trim 把它
+   剥了）——布局不变式改为「非空白字符序列一致」后 PASS，**折行本身无 bug**。
+5. **renew_smoke：0 failure(s)**——目录/psvts/续期后 3030 字节真实正文：凭据门禁与
+   续期在审查修复后行为不变。
+6. menu SMOKE：PASS（PIXEL-CHECK/ft=on）。
+
+### 待办（唯一设备项，交用户）
+
+- **键位手感交互验收**（跨五批未做）：`tools/deploy-weread.sh --interactive`，
+  按 docs/keymap-k4.md §五逐条：书架选书 → RPgFwd/LPgFwd 翻页 → 章末续读 →
+  Left/Right 换章 → ScreenKB+Up 目录 → Menu 快捷菜单 → Back 退出 → 继续阅读回位。
+  若 ScreenKB 粘住（组合键不释放）：latch 800ms 超时释放已实现，观察是否还需调参。
+
 ## 2026-11-20 · 独立代码审查（orbital_handoff RESUME + ub-mode + code-review-skill）
 
 **目标**：接手 DK-3 现状（后续会话已推进：会话生命周期/续期/测试体系），全量代码审查并修复。
