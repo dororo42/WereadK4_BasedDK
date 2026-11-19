@@ -13,6 +13,7 @@ local Auth = require("auth")
 local Shelf = require("shelf")
 local Download = require("download")
 local Reader = require("reader")
+local Report = require("report")
 local Progress = require("progress")
 local WeRead = require("protocol")
 
@@ -206,12 +207,21 @@ local function read_book(book_id)
             return
         end
 
+        local t_open = os.time()
         local ret = Reader.open(body, ch.title, page)
         if not ret then
             show("阅读器打开失败", true)
             return
         end
         Progress.set(book_id, cur_idx, ret.page, ch.title)
+        -- 服务端同步（DK-3.5）：位置随阅读时长一起上报，一章一次。失败不打扰阅读——
+        -- 本地进度已落盘，丢的只是一次服务器同步，下次离开该章还会再报。
+        Report.send({
+            book_id = book_id, chapters = chapters, chapter_idx = cur_idx,
+            page = ret.page, total_pages = ret.total_pages,
+            psvts = sess.psvts, pclts = sess.pclts, token = sess.token,
+            elapsed_seconds = os.time() - t_open,
+        })
 
         local pos = Download.chapter_pos(chapters, cur_idx)
         if ret.action == "next_chapter" then

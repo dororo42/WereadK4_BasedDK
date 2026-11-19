@@ -79,8 +79,14 @@ function Download.fetch_psvts(book_id)
     -- 匿名响应清空整个登录 jar。会话 cookie 的写入权归 Api.request 的门禁与
     -- Auth.renew 两处，别的地方一律只读。
     -- ReaderState.extract 的 psvts 字段（window.__INITIAL_STATE__ 内嵌 JSON 或裸正则兜底）
-    local psvts = html:match([["psvts"%s*:%s*"([^"]+)"]])
-    return psvts, status
+    -- 第三个返回值是整份 reader state：上报（report.lua）还需要 pclts 与 token，
+    -- 少抽一个就得靠猜——插件 reader_state.lua:29-31 是三个一起抽的。
+    local state = {
+        psvts = html:match([["psvts"%s*:%s*"([^"]+)"]]),
+        pclts = html:match([["pclts"%s*:%s*"([^"]+)"]]),
+        token = html:match([["token"%s*:%s*"([^"]+)"]]),
+    }
+    return state.psvts, status, state
 end
 
 ------------------------------------------------------------------ 正文
@@ -219,7 +225,11 @@ end
 local function session_psvts(book_id, sess)
     if not sess.tried then
         sess.tried = true
-        sess.psvts, sess.perr = Download.fetch_psvts(book_id)
+        local psvts, perr, state = Download.fetch_psvts(book_id)
+        sess.psvts, sess.perr = psvts, perr
+        -- 上报用的另外两个会话参数，随同一次 reader 页请求一起留存
+        sess.pclts = state and state.pclts
+        sess.token = state and state.token
     end
     return sess.psvts, sess.perr
 end
