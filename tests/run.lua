@@ -15,6 +15,7 @@ local suites = {
     "report_retry_test",
     "position_golden_test",
     "api_jar_test",
+    "crypto_test",
 }
 
 local total = 0
