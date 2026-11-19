@@ -10,6 +10,8 @@ package.path = "/mnt/us/weread/lua/lib/?.lua;/mnt/us/weread/lua/?.lua;" .. packa
 local Api = require("api")
 local Auth = require("auth")
 local Shelf = require("shelf")
+local Download = require("download")
+local Reader = require("reader")
 
 local FONT_PATH = os.getenv("WR_FONT") or "/mnt/us/weread/fonts/wqy-microhei.ttc"
 
@@ -152,7 +154,19 @@ if not SMOKE then
                 local book_id, book = Shelf.run()
                 if book_id then
                     assert(wr.fb_open(), "fb_open failed")
-                    show("阅读器开发中: " .. tostring(book.title or book_id))
+                    Auth.clear_screen("下载章节中: " .. tostring(book.title or book_id):sub(1, 24))
+                    local chapters, derr = Download.book(book_id, 1)
+                    local ch = chapters and chapters[1]
+                    if ch and not ch._err then
+                        local text = Download.read_chapter(book_id, ch.chapterIdx)
+                        if text then
+                            Reader.open(text, ch.title)
+                        else
+                            show("章节读取失败")
+                        end
+                    else
+                        show("下载失败: " .. tostring((ch and ch._err) or derr):sub(1, 40))
+                    end
                 end
                 draw()
             else
