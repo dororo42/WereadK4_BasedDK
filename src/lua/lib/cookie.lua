@@ -80,6 +80,19 @@ function Cookie.merge_set_cookie(cookies, set_cookie)
     return cookies
 end
 
+-- jar 是否等价（条目名 + 值逐项相同）。用途：Api.request 只在会话**真的变了**时才写盘——
+-- 每个 2xx 响应都重写 auth.json 既磨闪存，又让「谁在什么时候改了凭据」无从回答。
+function Cookie.equal(a, b)
+    local left, right = a or {}, b or {}
+    for name, value in pairs(left) do
+        if right[name] ~= value then return false end
+    end
+    for name, value in pairs(right) do
+        if left[name] ~= value then return false end
+    end
+    return true
+end
+
 function Cookie.has_login_cookie(cookies)
     -- Modern WeRead uses wr_gid instead of wr_skey; fall back to wr_gid as the login credential.
     if cookies and type(cookies.wr_skey) == "string" and #cookies.wr_skey >= 8 then

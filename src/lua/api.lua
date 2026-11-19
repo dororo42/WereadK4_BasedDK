@@ -99,10 +99,16 @@ function Api.request(opts)
     -- （空值），按标准语义即删除——真机实测这条路把登录态清光，只剩重扫二维码
     -- （扫码有风控风险）。规则：已有会话的机器上，只接受「合并后仍是可用会话」
     -- 的 2xx 响应；合法轮换（新 wr_skey）照样生效，登录中途尚无会话则不受此限。
-    local merged = merge_cookies(auth.cookies, resp_headers)
+    --
+    -- 合并必须在**副本**上做：Cookie.merge_set_cookie 是就地改（空值=删除），把
+    -- auth.cookies 直接喂进去会先把调用方那份活 jar 掏空，于是下面 `not
+    -- has_login_cookie(auth.cookies)` 反过来变成 true——门禁把「会话刚被清空」
+    -- 误判成「本来就没会话、不受限」，然后原样落盘。tests/api_jar_test.lua 第 1 组。
+    local merged = merge_cookies(Cookie.sanitize(auth.cookies), resp_headers)
     local jar_usable = Cookie.has_login_cookie(merged)
         or not Cookie.has_login_cookie(auth.cookies)
-    if status and status >= 200 and status < 300 and jar_usable then
+    if status and status >= 200 and status < 300 and jar_usable
+        and not Cookie.equal(auth.cookies, merged) then
         auth.cookies = merged
         if not opts.no_save then
             Api.save_auth(auth)
