@@ -1,5 +1,23 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-19 · 复用 vs 自编译评估 + handoff 固化（设备仍离线）
+
+**目标**：用户决策问题（复用多看 vs 重新编译，哪个更贴合/收益更高）+ 当前状态 handoff。
+
+### 动作
+
+1. **评估落地** `docs/tech-decision-reuse-vs-recompile.md`：结论=现状双变体混合已是收益最优
+   （渲染/UI 自编译 + 网络层复用 libcurl），复用是过渡态（TLS 老化/CVE/绑定 glibc 2.12.1），
+   自编译不省 TLS 大坑；网络层失效预案 runbook 化（weread TLS 握手失败=唯一触发信号）。
+   多看自有组件（KindleApp/dkkernel）判死维持——复用甜点区=OSS 成品运行库+字体数据。
+2. **handoff** `dk2-download-reader-code-ready`（READY）：DK-2 后半代码完成（download/reader/menu
+   级联，147c543），download_smoke 待设备恢复；上份交接三项全部给出结局；设备离线 blocker 记录。
+
+### 状态
+
+- 设备仍离线（No route to host）。设备上线后首跑 download_smoke（见 handoff 下一步 1）。
+- 本批次无代码变更（纯文档/交接）。
+
 ## 2026-11-19 · DK-2 后半：download.lua + reader.lua 完成（真机 smoke 待设备恢复）
 
 **目标**：DK-2 余项——章节下载 + 阅读器 + 菜单级联全实现。
