@@ -1,5 +1,48 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-20 · 独立代码审查（orbital_handoff RESUME + ub-mode + code-review-skill）
+
+**目标**：接手 DK-3 现状（后续会话已推进：会话生命周期/续期/测试体系），全量代码审查并修复。
+
+### RESUME 核查
+
+- 上一份交接（dk2-download-reader-code-ready）判 VERY_STALE：**历史被改写**（09a3a57 不可达）
+  且后续会话推进了 DK-3（dk3_smoke 假绿修复=net.c 丢响应头、会话生命周期/renewal、键位改造、
+  11 套主机测试）。以链头 dk3-login-persistence-device-recheck（STALE 2.9h）为准接手。
+- 基线：10 套测试全绿、双变体构建零错。设备第三次掉线（ssh 判据，ping/扫段不采信）。
+
+### 审查范围与发现（逐文件）
+
+| 级别 | 位置 | 发现 |
+|---|---|---|
+| 🔴 | reader.lua wrap_line | 字节 pos 与字符计数混用→中文行超宽折行切进 UTF-8 字符中间（乱码/空行风暴）。ASCII 恰好 1B=1char 而漏过既有测试。 |
+| 🟡 | input.c mod latch | handoff 预案未落地：code 29 不报 release → 修饰键永久粘住。 |
+| 🟡 | json.write_atomic | tmp+rename 有但无 sync——本批实测三次掉电，rename 后 page cache 未回写即断电会丢凭据/进度。 |
+| 🎉 | api.lua 门禁/副本合并、net.c 头收集修复、progress.lua 单写者、auth.lua 续期分类器 | DK-3 新增面质量高，测试钉住到位。 |
+| 🟢 | net.c | 内存安全干净（栈平衡/无泄漏/无越界）；UA 双设无害（HTTPHEADER 覆盖）。 |
+
+### 修复（TDD 红绿）
+
+1. 🔴 wrap_line 重写为**字符域贪心**（utf8_chars 切分 + measure 依赖注入 + 单字符超宽强制收行）
+   + tests/wrap_test.lua 8 断言（回环不变式/切字/超宽单字符不死循环/空行/单字符/混合宽度）。
+   红绿两轮：测试自身两处初稿错误（假测量恒 10 不随长度、rows 计数笔误）修正后绿。
+2. 🟡 input.c：`wr_mod_expired(now_ms, press_ms)` 纯函数（>800ms 过期）+ struct 加 mod_press_ms
+   + poll 开头超时清零 + press 记时刻/release 归 -1 + WR_INPUT_TEST_MAIN 3 断言
+   （新增 EXPECT_INT 宏）。红绿 sanity（断言故意写反必须红）确认断言真实执行。
+3. 🟡 json.write_atomic：rename 后 os.execute("sync")（写频低，秒级阻塞可接受）。
+
+### 回归证据
+
+- `lua5.1 tests/run.lua` → **LUA-TESTS-OK (11 suite(s))**（wrap_test 收编，改返回计数契约——
+  初稿误用 os.exit 会吞掉汇总行）
+- `make weread && make weread-dyn` → 0 error；`make host-selftest` → HOST-OK + INPUT-OK（含 latch 红绿）
+- 未 push（仓库 public，push 需用户点头——沿用上批纪律）
+
+### 待办交接
+
+- 真机：键位手感交互验收（唯一挂着的设备项，跨五批）+ 设备恢复后全量部署复跑 11 套
+- 设备掉线次数已 3 次：DK-3 稳定性阶段建议给 progress/auth 落盘加「写前备份 auth.json.bak」双份滚动
+
 ## 2026-11-19 · 签名面：先判定「哪种测试不值得写」，再补摘要已知答案 + 真机跨架构取证
 
 **目标**：继续测试剩下的无断言生产面。第一个候选是签名面（`protocol.lua` → `sign()` → md5/sha256），
