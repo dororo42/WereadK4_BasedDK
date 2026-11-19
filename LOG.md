@@ -44,6 +44,10 @@
     `Api.request`（已受门禁）之后又自己 `merge_cookies` + `save_auth` 一次——一次带空值 Set-Cookie 的
     响应照样能绕过门禁清空会话；而它全仓零调用方（登录走 jar_request，书架走 Api.gateway）。整段删除，
     凭据写入口收敛为三处且全部经过判定：`Api.request` 门禁分支、`Auth._complete`、`Auth.renew`。
+13. **把不变量做成机器门槛**（`Makefile` host-lua-test）：`Api.save_auth` 调用点数必须恰好等于 3，否则整条
+    Lua 门禁红牌并打印「合法写入口是哪三处 + 为什么」。**双向验证过**：现状 3 处绿；临时插入第 4 处未受判定
+    的写盘点后立即失败（`CRED-WRITER-GUARD: Api.save_auth 调用点 4 处，应为 3`），复原后回绿。
+    理由：这条纪律靠 grep 记忆不可靠，下一批 agent（或我）新增落盘点时不会先想起它。
 
 ### 验证
 

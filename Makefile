@@ -78,6 +78,14 @@ host-selftest:
 # 主机侧 Lua 单测（lua5.1，纯逻辑模块：progress / download 无设备依赖部分）
 host-lua-test:
 	lua5.1 tests/run.lua
+	@n=`grep -rn --include=*.lua 'Api\.save_auth(' src | grep -vc 'function Api.save_auth'`; \
+	if [ "$$n" != 3 ]; then \
+		echo "CRED-WRITER-GUARD: Api.save_auth 调用点 $$n 处，应为 3"; \
+		echo "  合法写入口：Api.request 的 2xx+可用会话门禁分支、Auth._complete、Auth.renew(仅 replaced/stale)"; \
+		echo "  新增写盘点必须先过 Cookie 判定——无条件落盘会吃掉登录态，而恢复它只能重扫二维码（风控）"; \
+		exit 1; \
+	fi; \
+	echo "CRED-WRITERS-OK (3 write points, all gated)"; \
 
 clean:
 	rm -rf $(BUILD)
