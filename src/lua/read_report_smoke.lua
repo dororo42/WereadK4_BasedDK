@@ -131,26 +131,32 @@ step(math.abs(after_co - pos.chapter_offset) <= 1, "server offset landed",
 step(math.abs(after_pr - pos.percent) <= 2, "server percent landed",
     string.format("sent=%d got=%.3f", pos.percent, after_pr))
 
------------------------------------------------------------------- 3) 页码换算与服务端同一量级
+------------------------------------------------------------------ 3) 页码换算：真机目录上每页可算、单调、有界
 
+-- 这里过去拿服务端的 chapterOffset 反推页码再比 percent——已删：标定证明服务端的 co
+-- 不是本仓这套字数约定（171 本里 97 本的 co 大于本章 wordCount），拿它当基准得到的
+-- 贴近纯属巧合，而且当时 co/words=1.87 被 math.min(10,…) 夹成末页，把反例吞成了 PASS。
 local chapters = Download.fetch_catalog(book.bookId)
 if type(chapters) == "table" and #chapters > 0 then
-    local ch = Download.find_chapter(chapters, pos.chapter_idx)
-    local words = ch and tonumber(ch.wordCount) or 0
-    if ch and words > 0 then
-        -- 服务端偏移折成 10 页制的页码，再用本仓换算算回去；两边百分比应当贴近
-        local page = math.min(10, math.floor(pos.chapter_offset / words * 10) + 1)
-        local local_pos = Report.position_of(chapters, pos.chapter_idx, page, 10)
-        step(local_pos ~= nil and math.abs(local_pos.percent - pos.percent) <= 6,
-            "local page->percent matches server percent",
-            local_pos and string.format("local=%d server=%d (page %d/10, words %d)",
-                local_pos.percent, pos.percent, page, words) or "nil")
-    else
-        step(false, "local page->percent matches server percent",
-            "上报的章不在目录里或 wordCount=0，无法比对")
+    local prev, monotone, bounded, first, last, refuse = -1, true, true, nil, nil, nil
+    for page = 1, 10 do
+        local q, qerr = Report.position_of(chapters, pos.chapter_idx, page, 10)
+        if not q then
+            monotone = false
+            refuse = "page " .. page .. " 拒答: " .. tostring(qerr)
+            break
+        end
+        first = first or q.percent
+        last = q.percent
+        if q.percent < prev then monotone = false end
+        if q.percent < 0 or q.percent > 100 then bounded = false end
+        prev = q.percent
     end
+    step(monotone, "position_of 每页可算且随翻页不减（字数换算在这本真书目录上成立）", refuse)
+    step(bounded, "percent 始终落在 0..100",
+        type(first) == "number" and string.format("%d%% -> %d%%", first, last) or nil)
 else
-    step(false, "local page->percent matches server percent", "catalog failed")
+    step(false, "position_of 每页可算且随翻页不减", "catalog failed")
 end
 
 ------------------------------------------------------------------ 4) 会话盘面：上报没把登录态换掉

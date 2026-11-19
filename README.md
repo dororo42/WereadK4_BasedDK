@@ -49,5 +49,7 @@ tools/deploy-weread.sh                             # 全量部署 + SMOKE 像素
 tools/deploy-weread.sh --interactive               # 五向键交互验收
 ```
 
-设备侧数据面验收脚本（无 UI，退出码非 0 即失败）：`lua/download_smoke.lua`、`lua/dk3_smoke.lua`。
+设备侧数据面验收脚本（无 UI，退出码非 0 即失败）：`lua/download_smoke.lua`、`lua/dk3_smoke.lua`、
+`lua/renew_smoke.lua`（免扫码续期）、`lua/read_report_smoke.lua`（阅读上报，零位移 + 回读对账）。
+`lua/report_calib.lua` 是只读标定件（不写服务端），用来复验「服务端 co/pr 各存各的」这条判据。
 键位约定见 `docs/keymap-k4.md`。

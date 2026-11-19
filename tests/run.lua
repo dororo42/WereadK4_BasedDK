@@ -12,6 +12,7 @@ local suites = {
     "cookie_test",
     "renew_test",
     "report_position_test",
+    "report_retry_test",
 }
 
 local total = 0
