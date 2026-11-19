@@ -40,6 +40,10 @@
     `status=200 body={"succ":1}` 且轮换回来的 `wr_skey` 只有 **8** 字符——续期其实成功，是被照搬过来的
     阈值判死。改 `Auth.RENEW_MIN_SKEY_LEN = 8` 与 `has_login_cookie` 同源，并加测试禁止两者在
     「会丢活会话」的方向上不一致。
+12. **不变量复查抓出残留写入口**：按「谁写 auth.json」逐行 grep，发现 `Api.authenticated_get` 在
+    `Api.request`（已受门禁）之后又自己 `merge_cookies` + `save_auth` 一次——一次带空值 Set-Cookie 的
+    响应照样能绕过门禁清空会话；而它全仓零调用方（登录走 jar_request，书架走 Api.gateway）。整段删除，
+    凭据写入口收敛为三处且全部经过判定：`Api.request` 门禁分支、`Auth._complete`、`Auth.renew`。
 
 ### 验证
 
@@ -52,7 +56,7 @@
 
 ### 状态
 
-代码 + 测试就绪，未 push。待办：① 设备上线复测 `renew()` = `replaced`；② 键位手感验收
+代码 + 测试就绪（本批 5 个提交 a59da13→115dc3e），未 push。待办：① 设备上线复测 `renew()` = `replaced`；② 键位手感验收
 （`tools/deploy-weread.sh --interactive`）仍未做；③ 探测脚本仍留在设备 `/mnt/us/weread/lua/`，
 `auth.json.prelogin-1910` / `bak-1926` / `pre-renew-test` 备份待用户决定去留。
 
