@@ -1,5 +1,48 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-19 · 真机验收发现正文为空 → 修掉 net.c 两个响应头 bug（会话cookie从不刷新）
+
+**目标**：用户告知 K4 上线，要求「进行必要的测试」，把 DK-3 积压的真机数据面验收跑完。
+
+### 动作
+
+1. **离线门槛复绿**后部署：`make host-selftest`（量化 + input 组合键）、`make host-lua-test`（3 套）、
+   `tools/deploy-weread.sh`（`PIXEL-CHECK PASS`），再跑 `dk3_smoke.lua` → 末行 `0 failure(s)`。
+2. **没有采信这个绿**：spool 下来的 3 章只有 8/14/66 字节——全是标题。扩面到 8 本书取第 5 章，
+   `fetch_chapter_text` 一律返回 **0 字节正文**，确认是会话级而非单书级问题。
+   → `dk3_smoke.lua:79` 的 `spooled > 0` 只验证「文件存在」，标题级缓存即可满足 → **验收假绿**。
+3. **排除法定位**：`make_content_params` 与参考插件逐字节相同（diff 只有 require 路径与 randomseed）→
+   不是参数/签名；对照端点经同一路径返回 2.7KB 404 页面 → 不是 body 捕获；
+   `t_0` 的 `status=200 bodylen=0` 是服务端真的给了空分片。
+4. **根因一**（`src/device/net.c:55`）：`on_header` 早退条件 `total > 6`——本意是给
+   `memcmp(line,"HTTP/",6)` 限长防越界，实际把**每一条真实响应头**全部丢弃，`set-cookie` 到不了 Lua。
+   改为 `(total >= 6 && memcmp(...) == 0)`：既保住短行，也不越界读状态行前缀。
+5. **根因二**（`src/device/net.c:268`）：响应头入表时 `lua_gettable` 已弹走 key，收尾又把 key 压在
+   value 之上，而 `lua_settable` 要求栈序 `[..., tbl, key, value]` → 实际写成 `tbl[值] = 名`
+   （现象：`nginx/1.16.1: server`）。改为 `pushkey; pushvalue(key); gettable(-3)`，两个分支统一收尾
+   `settable(-3)`。`hdrs["set-cookie"]` 此前恒为 nil。
+6. **代价与教训**：`set-cookie` 合并首次真正生效后，服务端下发 `wr_vid=`/`wr_skey=`（空值），
+   `lib/cookie.lua:46` 按标准语义正确地删除了它们 → 设备上登录态失效（无备份，已无法回滚）。
+   会话早已名存实亡（这正是 bug 的表现），但**把过期落盘的直接触发者是我反复跑的探测脚本**：
+   动网络路径前应先备份 `data/auth.json`。本轮起固化为习惯，已在重登前补 `auth.json.prelogin-1910`。
+7. 旧 spool 整体挪至 `/mnt/us/weread/books.stale-1843`（未删）；`evsniff` 交叉编译推上设备，
+   确认三个输入节点均未被 grab（event0 tequila-keypad / event1 fiveway / event2 volume）。
+
+### 验证
+
+- 修复后 `probe_pairs.lua`：`KEY=[server] VAL=[nginx/1.16.1]`、`content-type`→`text/html; charset=utf-8`，
+  同名头追加语义正常（`vary` = 两行 `Accept-Encoding`）——键值不再颠倒。
+- 修复后 8 本书第 5 章正文：**531 / 2069 / 14333 / 9262 / 4213 / 1123 / 2284 / 15795 字节，全部 HAS-BODY**。
+  正文链路自 DK-2 起首次真正打通（此前阅读器渲染的一直是空数据）。
+- `make weread-dyn` 重建零警告；`make host-selftest` / `host-lua-test` 仍全绿。
+
+### 状态
+
+已修已提交（net.c 两处）。待办：`wr_rt` 缺失（`auth.lua:186` 丢弃 `refreshToken`，web 域轮换 skey 后
+无法续期）→ 本轮重登后验证；`dk3_smoke` 断言需改为要求正文长度、`fetch_chapter_text` 需对空分片报错，
+否则这类故障继续静默通过；键位手感验收因 60s 采集窗口内无人按键仍未完成。
+
+
 ## 2026-11-19 · git 历史改写：从全部提交中清除内网设备地址（force push 已获授权）
 
 **目标**：用户指示「用 git filter-repo 清除历史里的旧 IP 并 force push」。上一批只清了 HEAD，

@@ -49,10 +49,13 @@ static size_t on_header(char *ptr, size_t size, size_t nmemb, void *ud)
     size_t total = size * nmemb;
     char *line = ptr;
 
-    /* 去掉行尾 \r\n；跳过 HTTP/ 状态行与空行 */
+    /* 去掉行尾 \r\n；跳过 HTTP/ 状态行与空行。
+     * 状态行判定必须同时限定 total >= 6，否则短行会越界读；此前的
+     * `total > 6` 早退把每一条真实响应头（set-cookie 在内）都丢掉了，
+     * 会话 cookie 因此永不刷新。 */
     while (total > 0 && (line[total - 1] == '\n' || line[total - 1] == '\r'))
         total--;
-    if (total == 0 || total > 6 || memcmp(line, "HTTP/", 6) == 0)
+    if (total == 0 || (total >= 6 && memcmp(line, "HTTP/", 6) == 0))
         return size * nmemb;
     {
         char *colon = memchr(line, ':', total);
@@ -262,17 +265,21 @@ static int l_http_req(lua_State *L)
                 const char *val = colon + 1;
                 size_t vlen = n - nlen - 1;
                 while (vlen > 0 && (*val == ' ')) { val++; vlen--; }
-                lua_pushlstring(L, p, nlen);      /* key */
-                lua_gettable(L, -2);              /* 旧值（同名头追加语义） */
+                /* lua_settable 要求栈序 [..., tbl, key, value]（value 在顶）。
+                 * 此前 lua_gettable 已弹走 key，又把 key 重新压到 value 之上，
+                 * 实际写入 tbl[value] = key —— 于是 hdrs["set-cookie"] 恒为
+                 * nil，会话 cookie 永不刷新。 */
+                lua_pushlstring(L, p, nlen);      /* [tbl, key] */
+                lua_pushvalue(L, -1);             /* [tbl, key, key] */
+                lua_gettable(L, -3);              /* 旧值：[tbl, key, old] */
                 if (lua_isnil(L, -1)) {
-                    lua_pop(L, 1);
+                    lua_pop(L, 1);                /* [tbl, key] */
                     lua_pushlstring(L, val, vlen);
                 } else {
-                    lua_pushlstring(L, "\n", 1);
+                    lua_pushlstring(L, "\n", 1);  /* 同名头追加语义 */
                     lua_pushlstring(L, val, vlen);
-                    lua_concat(L, 3);             /* old .. "\n" .. val */
+                    lua_concat(L, 3);             /* [tbl, key, old.."\n"..val] */
                 }
-                lua_pushlstring(L, p, nlen);      /* key */
                 lua_settable(L, -3);
             }
             if (!eol)
