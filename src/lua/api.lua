@@ -119,34 +119,6 @@ function Api.request(opts)
     return data, status, resp_headers
 end
 
--- 登录完成后的认证 GET（X-Vid/X-Skey + cookie），401 重试 3 次（插件同款）
-function Api.authenticated_get(url, vid, token, stage)
-    local auth = Api.load_auth()
-    local last_err, last_status
-    for attempt = 1, 3 do
-        local data, status, resp_headers = Api.request({
-            url = url,
-            headers = {
-                ["Referer"] = Api.SKILLS_PAGE_URL,
-                ["X-Vid"] = vid,
-                ["X-Skey"] = token,
-            },
-            auth = auth,
-            timeout = 20,
-        })
-        if data then
-            auth.cookies = merge_cookies(auth.cookies, resp_headers)
-            Api.save_auth(auth)
-            return data, status
-        end
-        last_err, last_status = status, status
-        if tostring(last_status):find("401", 1, true) == nil then
-            break                        -- 仅 401 重试（插件语义）
-        end
-    end
-    return nil, last_err or ("authenticated_get failed: " .. tostring(stage))
-end
-
 -- 数据 API 网关：POST gateway，Bearer api_key（skip_cookie，插件同款）
 function Api.gateway(api_name, params, auth)
     auth = auth or Api.load_auth()
