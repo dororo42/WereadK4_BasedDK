@@ -2,15 +2,19 @@
 # deploy-k4.sh — DK-0 部署验证：推送 fbtest 到 K4 并真机跑一轮。
 #
 # 用法: tools/deploy-k4.sh [屏幕停留秒数，默认 5]
-# 前置: K4 (root@<K4_HOST>:2222) 在线；build/fbtest 已由 make fbtest 编出。
+# 前置: K4 在线，设备地址由 K4_HOST 环境变量或 tools/k4-env.local.sh 提供（本机 only，不入库）；
+#       build/fbtest 已由 make fbtest 编出。
 # 安全: 只新建 /mnt/us/weread-trial/（新目录）；fbtest 自身备份并恢复原屏内容，
 #       不触碰 KOReader/weread_K4 安装。验证标准：屏幕可见变化 + EXIT=0 + dmesg 无报错。
 set -euo pipefail
 
-K4_HOST="${K4_HOST:-root@<K4_HOST>}"
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+if [ -z "${K4_HOST:-}" ] && [ -f "$ROOT/tools/k4-env.local.sh" ]; then
+    . "$ROOT/tools/k4-env.local.sh"
+fi
+: "${K4_HOST:?需要 K4_HOST —— cp tools/k4-env.example.sh tools/k4-env.local.sh 并填设备地址}"
 K4_PORT="${K4_PORT:-2222}"
 DELAY="${1:-5}"
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/build/fbtest"
 
 [ -x "$BIN" ] || { echo "缺 $BIN —— 先 make fbtest" >&2; exit 1; }

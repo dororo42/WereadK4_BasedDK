@@ -19,6 +19,9 @@
 | K4Refresh ABI 代码 | `/home/doro/work/k4refresh/src/{eink,quant,fx}.rs` | 双机验证的 einkfb 封装（本仓 fb.c 的直接参照，**勿改动**） |
 | weread API 形态表 | `~/reports/WereadK4_BasedDK-技术方案与实施计划-2026-11-15.md` §4.3 | weread_K4 插件（498 spec 绿）+ isword API 面取证 |
 
+> 上表全部是**本机 only** 材料（`~/reports/`、`/data/webdav/`、`~/isword_k4/`、`~/work/k4refresh/`），
+> 未随仓库发布。列出来是为满足「复用多看资产必须标注来源与版本」；结论已抄进本文档，读者不需要原文件。
+
 **验证等级标注**：`[L1]` K4/K5 双机实测；`[L2]` K4 单机实测；`[L3]` 反汇编定性（多看/KindleApp 字面量池或调用图）；`[L4]` 设计假设待真机验证。
 
 ---

@@ -4,12 +4,17 @@
 # 用法: tools/deploy-weread.sh [--interactive]
 #   默认: SMOKE 自动验收（渲染一帧 + 像素自检，不进按键循环）
 #   --interactive: 交互模式（需 KOReader 已退出释放输入；五向键导航，Back 退出）
+# 前置: 设备地址由 K4_HOST 环境变量或 tools/k4-env.local.sh 提供（本机 only，不入库）
 # 布局: /mnt/us/weread/{weread, lua/menu.lua, fonts/wqy-microhei.ttc}
 set -euo pipefail
 
-K4_HOST="${K4_HOST:-root@<K4_HOST>}"
-K4_PORT="${K4_PORT:-2222}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# 设备地址属本机部署环境，不入库：环境变量优先，其次 tools/k4-env.local.sh（模板 k4-env.example.sh）
+if [ -z "${K4_HOST:-}" ] && [ -f "$ROOT/tools/k4-env.local.sh" ]; then
+    . "$ROOT/tools/k4-env.local.sh"
+fi
+: "${K4_HOST:?需要 K4_HOST —— cp tools/k4-env.example.sh tools/k4-env.local.sh 并填设备地址}"
+K4_PORT="${K4_PORT:-2222}"
 BIN="${BIN:-$ROOT/build/weread-dyn}"
 MODE="${1:---smoke}"
 

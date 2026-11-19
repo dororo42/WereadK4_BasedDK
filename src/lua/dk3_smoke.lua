@@ -4,7 +4,8 @@
 -- → 进度写读往返（真机路径 /mnt/us/weread/data/progress.json）→ 原子写不留 .tmp。
 -- 键位手感（翻页/换章/ScreenKB 组合键）不在这里，用 tools/deploy-weread.sh --interactive 验收。
 --
--- 用法：ssh -p 2222 root@<K4_HOST> 'cd /mnt/us/weread && ./weread-dyn lua/dk3_smoke.lua'
+-- 用法：ssh -p "$K4_PORT" "$K4_HOST" 'cd /mnt/us/weread && ./weread-dyn lua/dk3_smoke.lua'
+--       （设备地址见 tools/k4-env.example.sh → tools/k4-env.local.sh，本机 only）
 -- 口径沿 download_smoke.lua：不选书（书架第一本可能不可读/未购），遇错只报，退出码非 0。
 
 package.path = "/mnt/us/weread/lua/lib/?.lua;/mnt/us/weread/lua/?.lua;" .. package.path

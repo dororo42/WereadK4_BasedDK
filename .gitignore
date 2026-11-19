@@ -8,6 +8,8 @@ target/
 audit/
 # handoff 本地 only
 handoffs/
+# 本机部署环境（设备地址），本地 only
+tools/k4-env.local.sh
 # 本地构建产物
 build/
 # vendor 第三方资产（本机 only）
