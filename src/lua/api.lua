@@ -34,25 +34,10 @@ function Api.load_auth()
 end
 
 function Api.save_auth(auth)
-    -- 原子写：先编码（失败则不落任何文件）→ 写临时文件 → 同分区 rename。
-    -- 避免掉电/kill 打断写入致 auth.json 截断损坏 → 下次 Json.decode 失败
-    -- → load_auth 返回空 → 用户被登出需重扫（ub-mode：崩溃中途应结束于同一状态）。
-    local data = Json.encode(auth)
-    local tmp = Api.AUTH_PATH .. ".tmp"
-    local f, err = io.open(tmp, "w")
-    if not f then return nil, err end
-    local wok, werr = f:write(data)
-    f:close()
-    if not wok then
-        os.remove(tmp)
-        return nil, werr
-    end
-    local rok, rerr = os.rename(tmp, Api.AUTH_PATH)
-    if not rok then
-        os.remove(tmp)
-        return nil, rerr
-    end
-    return true
+    -- 原子写（tmp + rename）统一由 Json.write_atomic 负责——避免掉电/kill 打断
+    -- 致 auth.json 截断损坏 → 下次 Json.decode 失败 → load_auth 返回空 →
+    -- 用户被登出需重扫（ub-mode：崩溃中途应结束于同一状态）。
+    return Json.write_atomic(Api.AUTH_PATH, auth)
 end
 
 function Api.has_login(auth)

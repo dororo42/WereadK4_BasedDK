@@ -245,4 +245,26 @@ function Json.decode(text)
     return val
 end
 
+-- 原子写：编码 → 写 <path>.tmp → 同分区 rename（掉电/kill 打断不会留下半截文件，
+-- 下次 decode 不会读到损坏内容）。失败时清理临时文件。返回 true | nil, err。
+function Json.write_atomic(path, value)
+    local ok, data = pcall(Json.encode, value)
+    if not ok then return nil, "encode: " .. tostring(data) end
+    local tmp = path .. ".tmp"
+    local f, err = io.open(tmp, "w")
+    if not f then return nil, err end
+    local wok, werr = f:write(data)
+    f:close()
+    if not wok then
+        os.remove(tmp)
+        return nil, werr
+    end
+    local rok, rerr = os.rename(tmp, path)
+    if not rok then
+        os.remove(tmp)
+        return nil, rerr
+    end
+    return true
+end
+
 return Json
