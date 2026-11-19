@@ -1,5 +1,31 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-19 · DK-2 后半：download.lua + reader.lua 完成（真机 smoke 待设备恢复）
+
+**目标**：DK-2 余项——章节下载 + 阅读器 + 菜单级联全实现。
+
+### 动作
+
+1. **插件 content.lua 管线还原**：目录=gateway /book/chapterinfo（Bearer）；正文=GET reader 页抽 psvts（正则兜底）→ make_content_params（protocol 已有：b/c=WeRead.e 加密+s 签名）→ POST /web/book/chapter/t_0(+t_1) → **shard 解码链**（32 字符 MD5 前缀校验 + 字节二进制→4 进制换位表 reverse_swaps + URL-safe base64）→ 纯文本。e_*/tar（epub/图片）简版不含。
+2. **lib/shard.lua 移植**（纯 Lua 分支，去 FFI——静态 exe 无动态符号）。
+3. **download.lua**：catalog（normalize 三形态展开）/fetch_psvts（cookie 带 jar）/fetch_chapter_text（t_0+可选 t_1，JSON 错误体识别）/spool（books/<id>/<idx>.txt，BusyBox mkdir）。
+4. **reader.lua**：freetype 26px 排版——UTF-8 二分折行（protocol.utf8_substr + font_width 贪心）、段落空行布局、五向翻页（Right/Down/Press 前翻，Left/Up 后翻，Back 退）、页脚进度；fb/input 生命周期归调用方（menu 级联共享）。
+5. **menu.lua 级联**：书架选书 → clear_screen"下载章节中" → Download.book(首章) → Reader.open → 回菜单。
+6. **download_smoke.lua**：全自动验证（书架第一本 → 目录 → 2 章下载 → spool 预览）。
+7. 笔误修复：download.lua Json 未定义引用、`not type(x)=="table"` 逻辑反。
+
+### 状态
+
+- 全部 luac 语法通过。**真机 download_smoke 未跑**：scp 阶段设备掉线（No route to host，
+  疑似休眠断 WiFi/被拿走），重试 4 次×15s 未恢复。设备上线后：
+  `tools/deploy-weread.sh` 然后 `ssh … ./weread-dyn lua/download_smoke.lua`。
+
+### 风险点（smoke 首跑重点看）
+
+- psvts 正则抽取（__INITIAL_STATE__ 大 JSON 的正则兜底路径是否命中）
+- t_0 shard MD5 校验（协议参数/时间戳偏差会在这里暴露）
+- 未购书 errCode（shelf.books[1] 可能是不可读条目——脚本只报错不选书，交互模式用户选书更可控）
+
 ## 2026-11-19 · DK-2 登录+书架全链路打通（真实账号登录成功，书架 10181 本）
 
 **目标**：登录正式入口 + 菜单级联 + 书架视图；用户实际扫码打通登录态。
