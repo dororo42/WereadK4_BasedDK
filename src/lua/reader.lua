@@ -33,7 +33,10 @@ Reader.KEY_NEXT_PAGE = { LPgFwd = true, RPgFwd = true, Down = true, Press = true
 Reader.KEY_PREV_PAGE = { LPgBack = true, RPgBack = true, Up = true }
 Reader.KEY_NEXT_CH   = { Right = true }
 Reader.KEY_PREV_CH   = { Left = true }
-Reader.KEY_TOC       = { Menu = true, ScreenKBPlusDown = true, ScreenKBPlusUp = true }
+-- docs/keymap-k4.md §二：Menu / ScreenKB+Down = 快捷菜单；ScreenKB+Up = 目录。
+-- 三键曾经全绑 toc（真机 bug：快捷菜单键打开的都是目录）→ 拆成两组。
+Reader.KEY_QUICKMENU = { Menu = true, ScreenKBPlusDown = true }
+Reader.KEY_TOC       = { ScreenKBPlusUp = true }
 Reader.KEY_EXIT      = { Back = true, Home = true }
 
 -- UTF-8 按字符切分（宽松版：非法序列按 1 字节吞掉，保证永远前进不丢字节）。
@@ -120,13 +123,13 @@ function Reader.open(chapter_text, chapter_title, start_page)
     page = math.min(page, total_pages)
 
     local function draw()
-        wr.fb_fill(0, 0, W, H, 0xFF)
+        wr.fb_fill(0, 0, W, H, 0x00)
         local first = (page - 1) * rows_per_page
         local y = MARGIN_TOP
         for i = first + 1, math.min(first + rows_per_page, #rows) do
             local row = rows[i]
             if row ~= "" then
-                wr.fb_text_ft(ft, MARGIN_X, y, row, 0x00)
+                wr.fb_text_ft(ft, MARGIN_X, y, row, 0xFF)
             end
             y = y + LINE_H
         end
@@ -167,6 +170,9 @@ function Reader.open(chapter_text, chapter_title, start_page)
             break
         elseif key and Reader.KEY_PREV_CH[key] then
             action = "prev_chapter"
+            break
+        elseif key and Reader.KEY_QUICKMENU[key] then
+            action = "quickmenu"
             break
         elseif key and Reader.KEY_TOC[key] then
             action = "toc"

@@ -129,6 +129,37 @@ local function reverse_swaps(encoded, positions)
     return table.concat(chars)
 end
 
+-- 单分片校验剥前缀（校验失败即 error）。decode_shards 复用。
+local function checked_body(response_text)
+    if not response_text or #response_text <= 32 then
+        return ""
+    end
+    local expected = response_text:sub(1, 32)
+    local body = response_text:sub(33)
+    local actual = Crypto.md5_hex(body):upper()
+    if actual ~= expected then
+        error("Shard MD5 mismatch")
+    end
+    return body
+end
+
+-- 多分片语义（plugin decode_content_shards 同款）：各分片校验剥 32 前缀、
+-- 正文拼接，**整体一次 decode**（首个分片 body 的首字节是格式标记）。
+function Shard.decode_shards(...)
+    local body = ""
+    for _, resp in ipairs({ ... }) do
+        if resp and #resp > 0 then
+            body = body .. checked_body(resp)
+        end
+    end
+    if #body == 0 then
+        return ""
+    end
+    local encoded = body:sub(2)
+    local restored = reverse_swaps(encoded, swap_positions(encoded))
+    return base64_decode(restored)
+end
+
 -- 校验 + 解码单个分片响应文本
 function Shard.decode(response_text)
     if not response_text or #response_text <= 32 then

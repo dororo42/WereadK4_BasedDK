@@ -44,13 +44,13 @@ function Auth.draw_login_screen(url, title, hint)
     local x0 = math.floor((W - size) / 2)
     local y0 = math.floor((H - size) / 2) + 20
 
-    wr.fb_fill(0, 0, W, H, 0xFF)
+    wr.fb_fill(0, 0, W, H, 0x00)
     if title and wr.font_load then
         pcall(function()
             local ft = wr.font_load("/mnt/us/weread/fonts/wqy-microhei.ttc", 30)
             if ft then
                 local w = wr.font_width(ft, title)
-                wr.fb_text_ft(ft, math.floor((W - w) / 2), 30, title, 0x00)
+                wr.fb_text_ft(ft, math.floor((W - w) / 2), 30, title, 0xFF)
                 wr.font_close(ft)
             end
         end)
@@ -81,13 +81,13 @@ end
 -- 消息屏（成功/失败/提示）
 function Auth.clear_screen(msg)
     local W, H = wr.fb_w(), wr.fb_h()
-    wr.fb_fill(0, 0, W, H, 0xFF)
+    wr.fb_fill(0, 0, W, H, 0x00)
     if wr.font_load then
         pcall(function()
             local ft = wr.font_load("/mnt/us/weread/fonts/wqy-microhei.ttc", 30)
             if ft then
                 local w = wr.font_width(ft, msg)
-                wr.fb_text_ft(ft, math.floor((W - w) / 2), math.floor(H / 2) - 20, msg, 0x00)
+                wr.fb_text_ft(ft, math.floor((W - w) / 2), math.floor(H / 2) - 20, msg, 0xFF)
                 wr.font_close(ft)
             end
         end)

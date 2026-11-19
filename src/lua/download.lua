@@ -95,6 +95,7 @@ end
 function Download.fetch_chapter_text(book_id, chapter_uid, psvts)
     local params = WeRead.make_content_params(book_id, chapter_uid, psvts, { sc = 1 })
     local auth = Api.load_auth()
+    local HtmlText = require("html_text")
 
     local function fetch_shard(endpoint)
         local body, status = wr.http_req({
@@ -114,9 +115,9 @@ function Download.fetch_chapter_text(book_id, chapter_uid, psvts)
         return body, status
     end
 
-    -- 抓一次 t_0。**空分片不当成功**：真机实测服务端对失效会话就是回 200 + 0 字节，
-    -- 若按原样返回 ""，整本书会静默降级成只有标题（dk3_smoke 曾因此假绿）。
-    local function grab()
+    -- txt 分片抓取（t_0 + 可选 t_1）。**空分片不当成功**：真机实测服务端对失效
+    -- 会话回 200 + 0 字节，按原样返回会让整本书静默降级成只有标题（假绿）。
+    local function grab_txt()
         local t0, st0 = fetch_shard("/web/book/chapter/t_0")
         if not t0 then
             return nil, "t_0 failed: " .. tostring(st0)
@@ -125,7 +126,6 @@ function Download.fetch_chapter_text(book_id, chapter_uid, psvts)
             return nil, "t_0 empty（可能未购/不可试读）"
         end
         if t0:sub(1, 1) == "{" and t0:find('"bookId"', 1, true) then
-            -- JSON 错误体（未购/试读结束等）
             local j = Json.decode(t0)
             return nil, "t_0 json: errCode=" .. tostring(j and j.errCode)
         end
@@ -139,28 +139,67 @@ function Download.fetch_chapter_text(book_id, chapter_uid, psvts)
         if decoded == "" then
             return nil, "EMPTY-SHARD"
         end
+        local ok1, t1 = pcall(fetch_shard, "/web/book/chapter/t_1")
+        if ok1 and t1 and t1 ~= "{}" and #t1 > 32 then
+            local ok2, decoded1 = pcall(Shard.decode, t1)
+            if ok2 then
+                decoded = decoded .. decoded1
+            end
+        end
         return decoded
     end
 
-    local text, err = grab()
-    if err == "EMPTY-SHARD" then
-        -- 先免扫码续一次会话再重试；续期失败才把问题报出去。
-        local Auth = require("auth")
-        local renew_status = Auth.renew()
-        text, err = grab()
-        if not text then
-            return nil, "正文为空（会话续期: " .. tostring(renew_status) .. "）"
-        end
-    elseif not text then
-        return nil, err
+    -- 格式探测（plugin fetch_chapter_xhtml 语义）：先 POST e_0——
+    --   返回 JSON+bookId        = txt 排版 → t_0/t_1 纯文本分片
+    --   其它（200 + xhtml 分片）= epub 排版 → e_0(+e_1/e_3 可选) 解码 → 剥标签
+    -- 真机实证：epub 书走 t_0 会拿到错位内容（用户报"乱码"；probe_fmt 取证
+    -- e_0 返回 base64('<?xml…')）。
+    local e0, e0st = fetch_shard("/web/book/chapter/e_0")
+    if not e0 then
+        return nil, "e_0 failed: " .. tostring(e0st)
+    end
+    if e0 == "{}" or e0 == "" then
+        return nil, "EMPTY-SHARD"
     end
 
-    local ok1, t1 = pcall(fetch_shard, "/web/book/chapter/t_1")
-    if ok1 and t1 and t1 ~= "{}" and #t1 > 32 then
-        local ok2, decoded1 = pcall(Shard.decode, t1)
-        if ok2 then
-            text = text .. decoded1
+    if e0:sub(1, 1) == "{" and e0:find('"bookId"', 1, true) then
+        -- txt 书：t_0 为主分片；空分片先免扫码续期再重试一次（真机会话失效形态）
+        local text, err = grab_txt()
+        if err == "EMPTY-SHARD" then
+            local Auth = require("auth")
+            local renew_status = Auth.renew()
+            text, err = grab_txt()
+            if not text then
+                return nil, "正文为空（会话续期: " .. tostring(renew_status) .. "）"
+            end
         end
+        return text, err
+    end
+
+    -- epub 书：e_0 必有 + e_1/e_3 可选；各分片校验剥 32 前缀后拼正文，整体一次解码
+    local bodies
+    local ok, res = pcall(Shard.decode, e0)
+    if not ok then
+        return nil, "shard decode: " .. tostring(res)
+    end
+    -- e_0 解出的 xhtml 是头部；e_1/e_3 的原始分片需拼进同一解码流（plugin 语义）：
+    -- 这里简化为"每片独立解码后拼接"——xhtml 按块级标签切分，跨片断点在块边界，
+    -- 实测多片书正文完整（单分片 >64KB 才会拆片，简版接受该限制）。
+    bodies = res
+    for _, ep in ipairs({ "/web/book/chapter/e_1", "/web/book/chapter/e_3" }) do
+        local okx, rawx = pcall(fetch_shard, ep)
+        if okx and rawx and rawx ~= "{}" and #rawx > 32 then
+            local okd, decodedx = pcall(Shard.decode, rawx)
+            if okd then
+                bodies = bodies .. decodedx
+            end
+        end
+    end
+
+    local text = HtmlText.to_text(bodies)
+    if text == "" then
+        -- 纯图片/封面页：剥标签后无文本
+        return "[图片页——简版暂不支持图片]"
     end
     return text
 end

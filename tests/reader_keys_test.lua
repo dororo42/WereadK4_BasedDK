@@ -27,10 +27,14 @@ check(Reader.KEY_PREV_PAGE.Left == nil, "Left 不得同时绑为上一页")
 check(Reader.KEY_NEXT_PAGE.LPgFwd == true and Reader.KEY_NEXT_CH.LPgFwd == nil,
       "翻页键不得被当成换章键")
 
--- 3. 目录 / 快捷菜单：Menu 键 + 两个 ScreenKB 组合键（组合名由 C 层 latch 产出）
-for _, k in ipairs({ "Menu", "ScreenKBPlusUp", "ScreenKBPlusDown" }) do
-    check(Reader.KEY_TOC[k] == true, k .. " 应为目录/快捷菜单")
-end
+-- 3. 快捷菜单 vs 目录：Menu/ScreenKB+Down=快捷菜单，ScreenKB+Up=目录（真机拆分修复）
+check(Reader.KEY_QUICKMENU.Menu == true, "Menu 应为快捷菜单")
+check(Reader.KEY_QUICKMENU.ScreenKBPlusDown == true, "ScreenKB+Down 应为快捷菜单")
+check(Reader.KEY_TOC.ScreenKBPlusUp == true, "ScreenKB+Up 应为目录")
+check(Reader.KEY_TOC.Menu == nil, "Menu 不得同时绑为目录")
+check(Reader.KEY_TOC.ScreenKBPlusDown == nil, "ScreenKB+Down 不得同时绑为目录")
+check(Reader.KEY_QUICKMENU.ScreenKBPlusUp == nil, "ScreenKB+Up 不得同时绑为快捷菜单")
+check(Reader.KEY_TOC.ScreenKBPlusUp == true, "ScreenKBPlusUp 应为目录")
 
 -- 4. 退出：Back / Home（进度由调用方保存）
 check(Reader.KEY_EXIT.Back == true, "Back 应为退出")

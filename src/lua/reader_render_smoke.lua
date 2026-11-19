@@ -67,17 +67,17 @@ end
 wr.fb_quant()
 wr.fb_refresh(0)
 
-local dark = 255
+local bright = 0
 for yy = 24, 700 do
     for xx = 30, 570 do
         local v = wr.fb_get(xx, yy)
-        if v >= 0 and v < dark then dark = v end
+        if v > bright then bright = v end
     end
 end
-print("pixel-check body-min=" .. tostring(dark) .. " (0=黑笔画 PASS)")
+print("pixel-check body-max=" .. tostring(bright) .. " (255=黑笔画 PASS)")
 wr.font_close(ft)
 wr.fb_close()
-local fails = (joined ~= original and 1 or 0) + (dark > 200 and 1 or 0)
+local fails = (joined ~= original and 1 or 0) + (bright < 200 and 1 or 0)
 print(string.format("reader render smoke: %s (fails=%d)",
       fails == 0 and "ALL PASS" or "HAS FAILURES", fails))
 os.exit(fails == 0 and 0 or 1)

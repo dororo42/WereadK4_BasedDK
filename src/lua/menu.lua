@@ -62,18 +62,18 @@ end
 local function draw()
     items, account_name = build_items()
     if sel > #items then sel = #items end
-    wr.fb_fill(0, 0, W, H, 0xFF)                            -- 白底
+    wr.fb_fill(0, 0, W, H, 0x00)                            -- 白底
     local title = "微信读书 K4" .. (account_name and ("  " .. account_name) or "")
-    text(16, 14, title, 0x00, ft_main)                      -- 标题（含账号名）
-    wr.fb_fill(16, 14 + TITLE_H, W - 32, 2, 0x00)           -- 分隔线
+    text(16, 14, title, 0xFF, ft_main)                      -- 标题（含账号名）
+    wr.fb_fill(16, 14 + TITLE_H, W - 32, 2, 0xFF)           -- 分隔线
 
     for i, name in ipairs(items) do
         local y = Y0 + (i - 1) * ITEM_H
         if i == sel then
-            wr.fb_fill(12, y - 6, W - 24, ITEM_H - 6, 0x00) -- 黑底高亮
-            text(22, y, name, 0xFF, ft_main)                -- 白字
+            wr.fb_fill(12, y - 6, W - 24, ITEM_H - 6, 0xFF) -- 黑底高亮
+            text(22, y, name, 0x00, ft_main)                -- 白字
         else
-            text(22, y, name, 0x00, ft_main)                -- 黑字
+            text(22, y, name, 0xFF, ft_main)                -- 黑字
         end
     end
 
@@ -89,10 +89,10 @@ end
 -- 选中非 Exit 项：显示提示，等任意键回到菜单。
 -- keep_screen=true 时不重绘主菜单（调用方随后自己 draw，省掉一次 eink 刷新）。
 local function show(msg, keep_screen)
-    wr.fb_fill(0, 0, W, H, 0xFF)
-    text(16, 14, "微信读书 K4", 0x00, ft_main)
-    wr.fb_fill(16, 14 + TITLE_H, W - 32, 2, 0x00)
-    text(22, Y0 + 20, msg, 0x00, ft_main)
+    wr.fb_fill(0, 0, W, H, 0x00)
+    text(16, 14, "微信读书 K4", 0xFF, ft_main)
+    wr.fb_fill(16, 14 + TITLE_H, W - 32, 2, 0xFF)
+    text(22, Y0 + 20, msg, 0xFF, ft_main)
     if ft_small then
         wr.fb_text_ft(ft_small, 16, H - 40, "按任意键返回", 0x60)
     else
@@ -124,9 +124,9 @@ local function pick_chapter(chapters, cur_idx)
     local pages = math.max(1, math.ceil(n / ROWS))
 
     local function draw_toc()
-        wr.fb_fill(0, 0, W, H, 0xFF)
-        text(16, 14, "目录", 0x00, ft_main)
-        wr.fb_fill(16, 14 + TITLE_H, W - 32, 2, 0x00)
+        wr.fb_fill(0, 0, W, H, 0x00)
+        text(16, 14, "目录", 0xFF, ft_main)
+        wr.fb_fill(16, 14 + TITLE_H, W - 32, 2, 0xFF)
         local first = pg * ROWS
         for i = 1, ROWS do
             local idx = first + i
@@ -141,10 +141,10 @@ local function pick_chapter(chapters, cur_idx)
                 label = "退出阅读"
             end
             if idx == pos then
-                wr.fb_fill(12, y - 6, W - 24, ITEM_H - 6, 0x00)
-                text(22, y, label, 0xFF, ft_main)
-            else
+                wr.fb_fill(12, y - 6, W - 24, ITEM_H - 6, 0xFF)
                 text(22, y, label, 0x00, ft_main)
+            else
+                text(22, y, label, 0xFF, ft_main)
             end
         end
         if ft_small then
@@ -256,23 +256,23 @@ end
 
 draw()
 
--- SMOKE 像素自检：字形区应有深色像素（<200），全白说明渲染失败
+-- SMOKE 像素自检（墨量极性：0x00=白底 / 0xFF=黑字）：字形区应有亮像素（>200）
 if SMOKE then
-    local function region_min(x0, y0, x1, y1)
-        local m = 255
+    local function region_max(x0, y0, x1, y1)
+        local m = 0
         for yy = y0, y1 do
             for xx = x0, x1 do
                 local v = wr.fb_get(xx, yy)
-                if v >= 0 and v < m then m = v end
+                if v > m then m = v end
             end
         end
         return m
     end
-    local title_min = region_min(18, 16, 300, 14 + TITLE_H)
-    local item1_min = region_min(22, Y0, 260, Y0 + ITEM_H - 10)
-    local footer_min = region_min(16, H - 44, 400, H - 10)
-    print(string.format("pixel-check title=%d item1=%d footer=%d", title_min, item1_min, footer_min))
-    if title_min > 200 or item1_min > 200 then
+    local title_max = region_max(18, 16, 300, 14 + TITLE_H)
+    local item1_max = region_max(22, Y0, 260, Y0 + ITEM_H - 10)
+    local footer_max = region_max(16, H - 44, 400, H - 10)
+    print(string.format("pixel-check title=%d item1=%d footer=%d", title_max, item1_max, footer_max))
+    if title_max < 55 or item1_max < 55 then
         print("PIXEL-CHECK FAIL: glyph region empty")
     else
         print("PIXEL-CHECK PASS")

@@ -69,12 +69,12 @@ if want_qr then
         local n, block, quiet = #matrix, 12, 2
         local x0 = math.floor((W - (n + quiet * 2) * block) / 2)
         local y0 = 100
-        wr.fb_fill(0, 0, W, H, 0xFF)
+        wr.fb_fill(0, 0, W, H, 0x00)
         for i = 1, n do
             for j = 1, n do
                 if matrix[i][j] > 0 then
                     wr.fb_fill(x0 + (j - 1 + quiet) * block, y0 + (i - 1 + quiet) * block,
-                               block, block, 0x00)
+                               block, block, 0xFF)
                 end
             end
         end
@@ -82,11 +82,11 @@ if want_qr then
         wr.fb_refresh(1)
         -- 像素自检：QR 定位点区应有黑块
         local dark = wr.fb_get(x0 + (2 + 3) * block, y0 + (2 + 3) * block)  -- matrix(4,4)=finder 中心
-        print("qr pixel-check: finder=" .. tostring(dark) .. " (0=黑 PASS)")
+        print("qr pixel-check: finder=" .. tostring(dark) .. " (255=黑 PASS)")
         local t0 = wr.millis()
         while wr.millis() - t0 < 5000 do end
         wr.fb_close()
-        check("qr.render", dark == 0 or dark < 200)
+        check("qr.render", dark > 200)
     else
         check("qr.render", false, "fb/qr failed")
     end

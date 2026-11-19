@@ -25,9 +25,9 @@ end
 -- 单页渲染
 local function draw_page(books, page, sel_abs, ft_main, ft_small, header)
     local W, H = wr.fb_w(), wr.fb_h()
-    wr.fb_fill(0, 0, W, H, 0xFF)
-    ft_center(ft_main, 14, header or "书架", 0x00)
-    wr.fb_fill(16, 14 + 40, W - 32, 2, 0x00)
+    wr.fb_fill(0, 0, W, H, 0x00)
+    ft_center(ft_main, 14, header or "书架", 0xFF)
+    wr.fb_fill(16, 14 + 40, W - 32, 2, 0xFF)
 
     local start = page * PAGE
     for i = 1, PAGE do
@@ -36,10 +36,10 @@ local function draw_page(books, page, sel_abs, ft_main, ft_small, header)
         if not book then break end
         local y = 70 + (i - 1) * 46
         if idx == sel_abs then
-            wr.fb_fill(12, y - 6, W - 24, 40, 0x00)
-            ft_text(ft_main, 22, y, tostring(book.title or "未命名"), 0xFF)
-        else
+            wr.fb_fill(12, y - 6, W - 24, 40, 0xFF)
             ft_text(ft_main, 22, y, tostring(book.title or "未命名"), 0x00)
+        else
+            ft_text(ft_main, 22, y, tostring(book.title or "未命名"), 0xFF)
         end
         local author = tostring(book.author or "")
         if author ~= "" and idx ~= sel_abs then
@@ -78,16 +78,17 @@ function Shelf.run()
 
     -- SMOKE：渲染一帧 + 像素自检即退（自动化验收）
     if SMOKE then
-        local m = 255
+        local m = 0
         for yy = 20, 60 do
             for xx = 200, 400 do
                 local v = wr.fb_get(xx, yy)
-                if v >= 0 and v < m then m = v end
+                if v > m then m = v end
             end
         end
         print("shelf pixel-check header=" .. tostring(m))
         if ft_main then wr.font_close(ft_main) end
         if ft_small then wr.font_close(ft_small) end
+        if m < 55 then print("SHELF-PIXEL-FAIL") else print("SHELF-PIXEL-PASS") end
         return nil, "smoke done, books=" .. #books
     end
 
