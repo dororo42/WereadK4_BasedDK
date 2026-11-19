@@ -147,6 +147,31 @@ local function spool_path(book_id, chapter_idx)
     return string.format("%s/%s/%03d.txt", Download.SPOOL, tostring(book_id), chapter_idx)
 end
 
+-- 是否已有可用缓存（空文件不算：那是一次失败下载的残留，应当重下）。
+function Download.is_spooled(book_id, chapter_idx)
+    local f = io.open(spool_path(book_id, chapter_idx), "r")
+    if not f then return false end
+    local size = f:seek("end") or 0
+    f:close()
+    return size > 0
+end
+
+-- 目录数组下标（进度存的是服务端 chapterIdx，预取要按数组连续取 N 章）。
+-- fetch_catalog 已按 chapterIdx 升序排序，但服务端值不保证从 1 连续，故两者不能混用。
+function Download.chapter_pos(chapters, chapter_idx)
+    local want = tonumber(chapter_idx)
+    if type(chapters) ~= "table" or not want then return nil end
+    for i, ch in ipairs(chapters) do
+        if ch.chapterIdx == want then return i end
+    end
+    return nil
+end
+
+function Download.find_chapter(chapters, chapter_idx)
+    local pos = Download.chapter_pos(chapters, chapter_idx)
+    return pos and chapters[pos] or nil
+end
+
 function Download.save_chapter(book_id, chapter_idx, title, text)
     local dir = Download.SPOOL .. "/" .. tostring(book_id)
     os.execute("mkdir -p '" .. dir .. "'")   -- BusyBox mkdir；路径自控无注入面
@@ -165,26 +190,70 @@ function Download.read_chapter(book_id, chapter_idx)
     return text
 end
 
--- 一本书的目录 + 首章内容落盘（阅读器入口用）。
--- 返回 chapters, first_path | nil, err
-function Download.book(book_id, max_chapters)
+------------------------------------------------------------------ 按需取章
+
+-- 会话参数：psvts 是单书生命周期内有效的会话参数，每本书只抽一次（换书必须重抽）。
+-- 懒取：全部章节都命中缓存时一次网络请求都不发。
+function Download.new_session()
+    return { psvts = nil, perr = nil, tried = false }
+end
+
+local function session_psvts(book_id, sess)
+    if not sess.tried then
+        sess.tried = true
+        sess.psvts, sess.perr = Download.fetch_psvts(book_id)
+    end
+    return sess.psvts, sess.perr
+end
+
+-- 取某章纯文本：命中 spool 直接读盘，否则下载并落盘后回读。
+-- 返回值统一是「spool 内容」形态（标题 + 空行 + 正文），与 read_chapter 一致——
+-- 不在此处拼标题串，避免与 save_chapter 的落盘格式分两处决策。
+-- 返回 text | nil, err
+function Download.ensure_chapter(book_id, chapters, chapter_idx, sess)
+    local cached = Download.read_chapter(book_id, chapter_idx)
+    if cached and #cached > 0 then
+        return cached
+    end
+    local ch = Download.find_chapter(chapters, chapter_idx)
+    if not ch then
+        return nil, "chapter not in catalog: " .. tostring(chapter_idx)
+    end
+    sess = sess or Download.new_session()
+    local psvts, perr = session_psvts(book_id, sess)
+    if not psvts then
+        return nil, "psvts failed: " .. tostring(perr or "no psvts")
+    end
+    local text, terr = Download.fetch_chapter_text(book_id, ch.chapterUid, psvts)
+    if not text then
+        return nil, terr
+    end
+    local path, serr = Download.save_chapter(book_id, ch.chapterIdx, ch.title, text)
+    if not path then
+        return nil, serr
+    end
+    return Download.read_chapter(book_id, ch.chapterIdx)
+end
+
+-- 批量预取：从目录第 start_pos 项起最多 max_chapters 章；已 spool 的跳过 → 重跑幂等。
+-- 单章失败不中断（后续章节可能正常），失败原因写在该项的 _err 上，reader 缺章时提示。
+-- 返回 chapters | nil, err
+function Download.book(book_id, max_chapters, start_pos)
     local chapters, err = Download.fetch_catalog(book_id)
     if not chapters or #chapters == 0 then
         return nil, "catalog failed: " .. tostring(err or "empty")
     end
-    local limit = math.min(max_chapters or 1, #chapters)
-    local psvts, perr = Download.fetch_psvts(book_id)
-    if not psvts then
-        return nil, "psvts failed: " .. tostring(perr)
-    end
-    for i = 1, limit do
+    local from = math.min(math.max(tonumber(start_pos) or 1, 1), #chapters)
+    local last = math.min(from + math.max(tonumber(max_chapters) or 1, 1) - 1, #chapters)
+    local sess = Download.new_session()
+    for i = from, last do
         local ch = chapters[i]
-        local text, terr = Download.fetch_chapter_text(book_id, ch.chapterUid, psvts)
-        if text then
-            Download.save_chapter(book_id, ch.chapterIdx, ch.title, text)
+        if Download.is_spooled(book_id, ch.chapterIdx) then
+            ch._err = nil
+        else
+            local text, terr = Download.ensure_chapter(book_id, chapters, ch.chapterIdx, sess)
+            ch._err = text and nil or terr
         end
-        -- 单章失败不中断（后续章节可能正常），reader 缺章时提示
-        ch._err = terr
     end
     return chapters
 end
