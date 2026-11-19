@@ -10,8 +10,8 @@
 
 ## Current Handoff
 
-- Latest: `handoffs/2026-11-19-085900-dk2-download-reader-code-ready/HANDOFF.md`
-- Branch: main（交接快照记为 09a3a57，实际 HEAD 已推进，以 `git log` 为准）
-- Status: 离线代码审查修复完成并提交（信号安全应急恢复 / header 截断 / auth 原子写 / shard 奇数守卫 / PRNG 播种，共 5 处），已过 luac + 交叉编译 + host 行为测试；设备仍离线，download_smoke 真机验证与 DK-3 待 K4 恢复上线。
+- Latest: `handoffs/2026-11-19-111648-dk3-reading-keys-resume/HANDOFF.md`
+- Branch: main @ a5e6b61（DK-3 阅读侧 6 个提交 af3c702→a5e6b61 已落地；指针快照可能滞后，以 git log 为准）
+- Status: 代码就绪，等待设备恢复——真机验收（dk3_smoke + 键位手感）与 git push（仓库无 remote）双阻塞
 
 任何 agent 开始工作前，先读上面的 HANDOFF.md。这份指针由 orbital_handoff 维护，手工交接时请同步更新。
