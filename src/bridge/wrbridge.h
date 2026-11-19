@@ -13,7 +13,11 @@
 /* 注册全局 "wr" 表（fb/input/font 全部入口）。返回 0 成功。 */
 int  wr_register(lua_State *L);
 
-/* 清理：恢复原屏 + 关闭 fb/input。可重复调用，信号处理与正常退出共用。 */
+/* 清理：恢复原屏 + 关闭 fb/input。可重复调用，正常退出路径使用。 */
 void wr_cleanup(void);
+
+/* 信号应急恢复：仅 async-signal-safe 操作（恢复原屏 + 释放输入独占），
+ * 跳过 free/munmap/FT_Done。信号处理器专用，随后应立即 _exit()。 */
+void wr_emergency_restore(void);
 
 #endif

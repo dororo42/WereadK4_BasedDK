@@ -183,10 +183,22 @@ static int l_http_req(lua_State *L)
         lua_pushnil(L);
         while (lua_next(L, -2) != 0) {
             if (lua_isstring(L, -2) && lua_isstring(L, -1)) {
-                char item[1024];
-                snprintf(item, sizeof(item), "%s: %s",
-                         lua_tostring(L, -2), lua_tostring(L, -1));
-                hdr_list = curl_slist_append(hdr_list, item);
+                /* 按实际长度堆分配，避免长 Cookie/Authorization 头被定长
+                 * 缓冲静默截断（截断会导致鉴权失败且无线索）。
+                 * curl_slist_append 内部拷贝字符串，故 append 后即可 free。 */
+                size_t klen, vlen;
+                const char *key = lua_tolstring(L, -2, &klen);
+                const char *value = lua_tolstring(L, -1, &vlen);
+                char *item = malloc(klen + vlen + 3);  /* "key: value\0" */
+                if (item) {
+                    memcpy(item, key, klen);
+                    item[klen] = ':';
+                    item[klen + 1] = ' ';
+                    memcpy(item + klen + 2, value, vlen);
+                    item[klen + vlen + 2] = '\0';
+                    hdr_list = curl_slist_append(hdr_list, item);
+                    free(item);
+                }
             }
             lua_pop(L, 1);
         }

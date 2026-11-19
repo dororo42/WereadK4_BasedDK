@@ -18,8 +18,10 @@
 
 static void on_signal(int sig)
 {
-    /* 异步信号安全：只调 wr_cleanup（内部是 close/ioctl/free，无 stdio）后 _exit。 */
-    wr_cleanup();
+    /* 异步信号安全：wr_emergency_restore 只做 memcpy/ioctl/fsync/close 级恢复，
+     * 不碰 free/munmap/FT_Done（非 async-signal-safe，打断 malloc 会死锁/坏堆）。
+     * fd 与映射由 _exit 回收。 */
+    wr_emergency_restore();
     _exit(128 + sig);
 }
 

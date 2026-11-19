@@ -279,3 +279,17 @@ void wr_cleanup(void)
     g_backup = NULL;
     g_backup_cap = 0;
 }
+
+void wr_emergency_restore(void)
+{
+    /* 信号处理专用：仅 async-signal-safe 操作（见 signal-safety(7)）。
+     * wr_ft_done/free/munmap 均会碰堆或不在安全清单，Ctrl+C 若打断 malloc
+     * 会死锁或损坏堆——故此处只做屏幕恢复(memcpy)+ioctl+fsync 与输入释放
+     * (ioctl+close)。fd 与内存映射由随后的 _exit() 回收，无需在此 close。 */
+    if (g_in_open) { wr_input_close(&g_in); g_in_open = 0; }
+    if (g_fb_open && g_backup) {
+        wr_fb_restore(&g_fb, g_backup, g_backup_cap);
+        wr_fb_refresh_full(&g_fb, WR_FX_PARTIAL);
+        wr_fb_wait(&g_fb);
+    }
+}

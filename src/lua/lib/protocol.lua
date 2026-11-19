@@ -4,6 +4,13 @@ local Crypto = require("crypto")
 
 local WeRead = {}
 
+-- 播种 PRNG：make_content_params 的 r、make_read_payload 的 rn/ts 用 math.random
+-- 生成 nonce。参考插件在 main.lua:28 init() 调 math.randomseed(os.time())，本仓
+-- 端口时遗漏 → 每次运行 nonce 序列恒定（跨会话可预测）。在此模块加载时播种一次
+-- （require 缓存保证仅执行一次），让"生成 nonce 的模块自带播种"，不依赖宿主入口
+-- 记得播种。os.time() 与插件一致；nonce 服务端不校验具体值，仅要求随机。
+math.randomseed(os.time())
+
 WeRead.USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36 Edg/135.0.0.0"
 -- WARNING: This is a protocol-compatibility constant from the WeRead web reader.
 -- If the server rejects sg signatures, this value may need to be updated from a

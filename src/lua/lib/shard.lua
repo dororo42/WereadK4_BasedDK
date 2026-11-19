@@ -108,6 +108,13 @@ local function swap_positions(encoded)
 end
 
 local function reverse_swaps(encoded, positions)
+    -- 换位以 (positions[i], positions[i-1]) 成对消费，步长 -2；奇数个会在
+    -- i=1 时读到 positions[0]=nil → 对 nil 做算术崩溃。swap_positions 在 tmp
+    -- 于奇数位耗尽时可能返回奇数个，故在此显式 fail-fast（Shard.decode 已被
+    -- download.lua pcall，异常会转成干净的解码失败而非崩溃）。
+    if #positions % 2 ~= 0 then
+        error("shard: odd swap-position count (" .. #positions .. ")")
+    end
     local chars = {}
     for i = 1, #encoded do
         chars[i] = encoded:sub(i, i)

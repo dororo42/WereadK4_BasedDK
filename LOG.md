@@ -1,5 +1,30 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-19 · 离线代码审查修复批次（ub-mode + code-review）
+
+**目标**：全量审查 C 设备/桥接层（~1626 行）+ Lua 协议/加密/业务层（~3507 行），修复其中可离线完成的缺陷。无 🔴 阻断级；核心协议/加密层质量高（已由可工作的登录+书架链路实证）。
+
+### 动作（分级审查 → 修复 5 处）
+
+1. 🟡 **信号安全**（wrmain.c / wrbridge.c / wrbridge.h）：原 `on_signal` 调 `wr_cleanup → wr_ft_done → FT_Done → free()`，`free` 非 async-signal-safe；Ctrl+C 打断 malloc 会死锁/坏堆且屏幕不恢复。新增 `wr_emergency_restore()`（仅 memcpy/ioctl/fsync/close 级恢复），信号路径改调它，正常退出仍用完整 `wr_cleanup`。逐一核实 `wr_input_close`(ioctl+close)/`wr_fb_restore`(memcpy)/`wr_fb_refresh_full`(ioctl)/`wr_fb_wait`(fsync) 均无 malloc/free。
+2. 🟡 **header 截断**（net.c）：HTTP 头定长 `char item[1024]`+`snprintf` → 长 Cookie/Authorization 静默截断致鉴权失败且无线索。改按 `klen+vlen+3` 堆分配手工拼接，`curl_slist_append`（内部拷贝）后立即 `free`。
+3. 🟡 **auth 原子写**（api.lua）：`save_auth` 就地覆写 auth.json，掉电/kill 中断 → 截断 → `Json.decode` 失败 → 用户被登出。改「先编码 → 写 .tmp → 同分区 rename」，写/rename 失败即 `os.remove(tmp)`；并删除无效 no-op `os.rename(path,path)`（注释名不副实，既不建目录也不校验）。
+4. 🟡 **shard 奇数守卫**（shard.lua）：`reverse_swaps` 步长 -2 成对消费 positions，奇数个 → i=1 时 `positions[0]=nil` 算术崩溃。入口加 `#positions%2~=0 → error`（fail-fast；`Shard.decode` 已被 download.lua pcall，异常转干净解码失败）。奇偶性证明：`swap_positions` 恒返回偶数（成对插入 + 第二插入守卫在循环条件成立时必然成立）→ 守卫为纯防御、对真实解码路径零回归。
+5. 💡 **PRNG 播种**（protocol.lua）：全树无 `math.randomseed` → nonce（r / rn / ts）跨运行恒定、可预测。比对参考插件（/home/doro/weread_K4.koplugin）确认其 `main.lua:28 init()` 调 `math.randomseed(os.time())`，本仓端口 protocol.lua 时遗漏该播种。改在 protocol.lua 加载时播种一次（require 缓存保证仅执行一次；「生成 nonce 的模块自带播种」，不依赖宿主入口）。
+
+### 验证（设备离线，本地静态 + 行为测试）
+
+- `luac -p`：api / shard / protocol 全通过。
+- 交叉编译 `-Wall -Wextra -fsyntax-only`（wrmain / wrbridge / net）零警告；`make weread` + `weread-dyn` 全量链接成功（7MB 静态 / 3MB 动态 ARM EABI5，唯一告警是 LuaJIT lj_clib.o 既有的 static-dlopen 提示，与本次无关）；`make host-selftest` HOST-OK。
+- **api.lua 行为测试**（加载真实模块，host lua5.1 + bit）：往返保存/读取（含 UTF-8 账号名）+ 覆盖写 + 无残留 `.tmp` = T_API_OK。
+- **protocol.lua 行为测试**：两进程相隔 >1s（不同 os.time 种子）→ nonce `r` 不同（111556 vs 15389929），且 `make_content_params` 输出结构（b/c/ct/ps/r/s）不变 = 播种生效且无回归。
+
+### 状态 / 未做（需真机，或判定为过度工程）
+
+- 设备仍离线（No route to host）。以上均可离线验证；`download_smoke` 真机验证待 K4 恢复上线。
+- **延后**：💡 menu.lua stringly-typed 分派（按中文标签字面量比较）、🟢 忙等自旋（auth/login/shelf/menu 多处 `while millis()-t0<N do end`）—— 二者均改设备侧 UI/输入行为，离线无法证伪，且现有代码已在真机跑通（登录+书架），遵循「不重构无法验证的工作代码」，待设备恢复再做。
+- **跳过**：🟢 render.c 负 pitch / pixel_mode 防御 —— `FT_LOAD_RENDER` 恒返回正 pitch + GRAY，加校验违反「不为不可能场景加防御代码」；🟢 auth.lua `dofile`→`require`（qrencode 绝对路径更健壮且为冷路径）；🟢 json.lua null 语义（当前业务未触及，改动有回归风险）。
+
 ## 2026-11-19 · 复用 vs 自编译评估 + handoff 固化（设备仍离线）
 
 **目标**：用户决策问题（复用多看 vs 重新编译，哪个更贴合/收益更高）+ 当前状态 handoff。

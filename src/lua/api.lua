@@ -34,11 +34,24 @@ function Api.load_auth()
 end
 
 function Api.save_auth(auth)
-    local dir_ok = os.rename(Api.AUTH_PATH, Api.AUTH_PATH) -- 无目录时仅无害失败
-    local f, err = io.open(Api.AUTH_PATH, "w")
+    -- 原子写：先编码（失败则不落任何文件）→ 写临时文件 → 同分区 rename。
+    -- 避免掉电/kill 打断写入致 auth.json 截断损坏 → 下次 Json.decode 失败
+    -- → load_auth 返回空 → 用户被登出需重扫（ub-mode：崩溃中途应结束于同一状态）。
+    local data = Json.encode(auth)
+    local tmp = Api.AUTH_PATH .. ".tmp"
+    local f, err = io.open(tmp, "w")
     if not f then return nil, err end
-    f:write(Json.encode(auth))
+    local wok, werr = f:write(data)
     f:close()
+    if not wok then
+        os.remove(tmp)
+        return nil, werr
+    end
+    local rok, rerr = os.rename(tmp, Api.AUTH_PATH)
+    if not rok then
+        os.remove(tmp)
+        return nil, rerr
+    end
     return true
 end
 
