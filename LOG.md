@@ -1,5 +1,37 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-20 · KUAL 启动无反应修复（DK-4 提前落地：启动器三件 + 真机生命周期验证）
+
+**目标**：用户报「KUAL>微信读书>启动微信读书，无反应」。
+
+### 根因
+
+`/mnt/us/extensions/weread/menu.json` 是 **isword 0.3.9 遗留**（Nov 4 日期，铁律不改它），
+"启动微信读书"action=`sh /mnt/us/weread/start.sh` → **文件不存在**（isword 部署从未包含/
+已被清理）→ KUAL sh action 静默失败。三项 action 全部断链。
+
+### 机制取证（不改发明，全部有出处）
+
+- KUAL 执行机制（k4weread.sh 注释）：点击后 KUAL 自杀退出（onStop）→ 脚本经 MKK su
+  后台执行，stderr→/var/tmp/KUAL.log，cwd=扩展目录 → 脚本直接前台跑应用即可。
+- framework 处理（koreader.sh K4 默认路径）：**framework 保留，cvm SIGSTOP 防盖屏**，
+  退出 SIGCONT + appmgrd 回主屏——不 stop framework、不碰 rc5（铁律），完全可逆。
+
+### 动作
+
+1. `kual/bin/{start,diagnose,recover}.sh` 三件补齐断链（menu.json/config.xml 原样不动）：
+   start.sh=防重复启动+cvm SIGSTOP+weread-dyn menu.lua+退出恢复+回 home；
+   diagnose.sh=只读报告；recover.sh=人工兜底。`tools/deploy-kual.sh` 部署（本仓 kual/ 入 git）。
+2. **真机生命周期验证**（模拟 KUAL 后台执行）：
+   - start.sh → weread-dyn 起（2 个 event fd=输入独占）+ cvm State:T(stopped) + fb md5 变化（菜单上屏）
+   - killall(TERM) → app exit rc=143（进程内 wr_cleanup 恢复原屏）→ cvm State:S(sleeping) → 回 home
+   - 全链路可逆，无残留。日志 /mnt/us/weread/data/start.log。
+
+### 交付状态
+
+KUAL 三项全部指向有效脚本。**用户可实测**：KUAL>微信读书>启动微信读书 → 主菜单；
+键位手感验收（docs/keymap-k4.md §五）随该路径一并完成。
+
 ## 2026-11-20 · 设备复跑：审查修复真机验收全绿（折行渲染/renew/dk3/菜单）
 
 **目标**：设备第四次上线，验证代码审查修复在真机上的行为。
