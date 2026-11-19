@@ -1,5 +1,31 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-19 · DK-2 登录+书架全链路打通（真实账号登录成功，书架 10181 本）
+
+**目标**：登录正式入口 + 菜单级联 + 书架视图；用户实际扫码打通登录态。
+
+### 动作
+
+1. **login.lua 正式入口**（QR→扫码→成功屏+书架验证）、**shelf.lua 书架列表**（gateway /shelf/sync → 中文列表 + 分页 + 五向键导航，SMOKE 像素自检）、**menu.lua 级联**（登录/书架项接线，标题显示账号名）。
+2. **json.lua 数字解析 bug 修复**（扫码登录凭据丢失根因）：`string.find` 无捕获组时 Lua 5.1 只返回两值，`local _,e,num = find(...)` 的 num 恒 nil → 所有 JSON 数字值静默丢失（webLoginVid 数字型凭据消失）。修复=模式加捕获组；api_smoke 补数字回归用例。
+3. **手机端"扫码失败"根因修复**：缺 **wr_fp 设备身份 cookie**。auth.lua 重写为插件 login_cookies 语义：独立 cookie jar（wr_fp=urandom 4 字节持久化 + skills 页预热 + 各步 Set-Cookie 合并），成功才落盘；api.lua 加 no_save 开关支持登录中途不写盘。
+4. **排除项**： salvage 第 2 轮会话（手工 auth.json + vid/skey）→ userInfo 层活但 apikeyGet 401（缺完整 jar）→ 证实必须走完整预热流程。
+5. 部署脚本升级为全量 lua 推送。
+
+### 真机验证（PASS）
+
+- **扫码登录成功**（账号 32819470）：手机端确认成功 → LOGIN_SUCCESS → userInfo → apikeyGet → auth.json 落盘
+- **gateway /shelf/sync：10181 books**（登录态验证达标）
+- 书架列表屏 SMOKE：`shelf pixel-check header=0`（真实数据渲染）
+- 调试过程证据链：poll_raw.json 落盘定位字段缺失 → DBG print 定位 json 数字 bug → 本地单测修复后一次通过
+
+### 遗留与下一步
+
+- 用户交互验收：`tools/deploy-weread.sh --interactive`（菜单五向键 + 书架翻页选择；Back 返回）
+- download.lua 章节下载 + reader.lua 阅读器（DK-2 后半，方案 §五）
+- 10181 books 含公众号/出版物等混合条目，shelf 视图分类过滤待做（对照插件 shelf 结构 books/archive/albums/mp）
+- NEED_OTP 短信验证码输入（K4 无键盘 UI，暂不支持，提示先网页版登录）
+
 ## 2026-11-19 · DK-2 业务层基础设施：API/登录 11 项真机验证全 PASS
 
 **目标**：DK-2 业务层第一波——网络扩展 + 协议层移植 + 登录流程 + 自动验证。
