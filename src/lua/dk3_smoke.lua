@@ -63,20 +63,29 @@ step(Download.find_chapter(chapters, first_idx) ~= nil, "find_chapter(hit)")
 step(Download.find_chapter(chapters, -12345) == nil, "find_chapter(miss)")
 
 ------------------------------------------------------------------ 3. 批量取章
-local batch = math.min(3, #chapters)
+local batch = math.min(5, #chapters)
 local chs, berr = Download.book(book.bookId, batch, 1)
 step(type(chs) == "table", "book(batch=" .. batch .. ")", berr)
-local spooled = 0
+local spooled, with_body, longest = 0, 0, 0
 for i = 1, batch do
     local ch = chs and chs[i]
     if ch then
         local has = Download.is_spooled(book.bookId, ch.chapterIdx)
-        print(string.format("  ch[%s] %s -> %s  spooled=%s",
-            tostring(ch.chapterIdx), tostring(ch.title), ch._err or "OK", tostring(has)))
+        local text = has and Download.read_chapter(book.bookId, ch.chapterIdx) or nil
+        -- 「有正文」= 明显长于标题。只验文件存在会被标题级缓存糊过去：
+        -- net.c 丢响应头那次，8/8 本书全部只 spool 出标题而本项仍显示 PASS。
+        local body = text and #text > #(tostring(ch.title)) + 8 or false
         if has then spooled = spooled + 1 end
+        if body then with_body = with_body + 1 end
+        if text and #text > longest then longest = #text end
+        print(string.format("  ch[%s] %s -> %s  spooled=%s bytes=%s body=%s",
+            tostring(ch.chapterIdx), tostring(ch.title), ch._err or "OK",
+            tostring(has), tostring(text and #text or 0), tostring(body)))
     end
 end
-step(spooled > 0, "spool has content", spooled .. "/" .. batch)
+step(spooled > 0, "spool has files", spooled .. "/" .. batch)
+step(with_body > 0, "spool has real chapter body",
+    with_body .. "/" .. batch .. " chapters carry body text, longest=" .. longest)
 
 ------------------------------------------------------------------ 4. 幂等：重跑不得重新下载
 local done_psvts = count_calls(Download, "fetch_psvts")

@@ -9,6 +9,8 @@ local suites = {
     "progress_test",
     "download_pure_test",
     "reader_keys_test",
+    "cookie_test",
+    "renew_test",
 }
 
 local total = 0
