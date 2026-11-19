@@ -1,5 +1,51 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-19 · DK-3 阅读侧：键位对齐 KOReader 习惯 + 批量下载 + 断点续读（设备仍离线）
+
+**目标**：用户两条要求——① 继续 DK-3（阅读侧优先、章末自动续读）；② 参考 weread_K4 插件快捷键，
+保留该使用习惯。
+
+### 动作
+
+1. **键位习惯溯源**：插件的键位不是它自定的，而是 KOReader 在 K4 上的默认——插件只劫持四处
+   （`ScreenKB+Down`/`Home`/`Menu`/`Back`，`reader_navigation.lua:18-161`）。权威表在插件
+   `README.md:70-88`：`Left/Right`=换章、`LPgFwd/RPgFwd`=下一页、`LPgBack/RPgBack`=上一页、
+   `Press`=底部菜单、`Menu`=顶部菜单、`Back`=关闭、`Home`=书架、`ScreenKB+Up`=目录。
+   我们 DK-2 的 reader 把 `Right/Down/Press` 当翻页、四个 bezel 翻页键一个没绑——直接冲突。
+2. **C 层修饰键 latch**（af3c702）：`wr_input_poll` 原本丢弃 release，Lua 侧看不到修饰键抬起。
+   latch 放 C（键位语义本来就在 `input.c` 决策，不下沉 Lua 造成分裂），产出 KOReader 同款
+   `ScreenKBPlus<Key>`；latch 挂 `struct wr_input`（跨设备：code 29 在 event0，D-pad 在 event1），
+   且排在通用 release 过滤之前（否则抬起被丢 → 修饰键粘住）。主机自测 `WR_INPUT_TEST_MAIN`。
+3. **进度存储**（216a6d8）：`lib/progress.lua`（原子写、损坏降级为空、book_id 一律 tostring 作键）；
+   顺手把 `api.lua:save_auth` 里手写的 tmp+rename 抽成 `Json.write_atomic` 共用（消除重复）。
+4. **下载侧**（0df7c75）：`is_spooled`（空文件不算缓存）/`chapter_pos`+`find_chapter`
+   （服务端 chapterIdx 不连续，与数组下标不能混用）/`new_session`+`ensure_chapter`
+   （psvts 每书抽一次、懒取；命中缓存零网络请求）。**不做批量预取**：单进程无异步，
+   预取只是把同样的等待提前到开书时（拖慢首页），改为章切换时按需下载 + 「准备章节」屏。
+5. **阅读器**（d88bdbf）：键位表导出为 `Reader.KEY_*` 模块字段（改键位不动控制流，且可主机单测钉住）；
+   跨章动作以 `action` 信号交回调用方；`start_page` 负数 = 从末页开始（回退上一章用）。
+6. **菜单**（a42d1cf）：`read_book` = 全项目唯一跨章决策点（目录→进度起点→按需取章→渲染→
+   每次离章即 `Progress.set`→按 action 分派）；`pick_chapter` 目录列表（末项「退出阅读」，
+   快捷菜单与目录共用一屏）；「继续阅读」接 `Progress.get_last()`。
+7. **验收**（fa69a41）：`dk3_smoke.lua` 用 `count_calls()` 包装 `fetch_psvts`/`fetch_chapter_text`
+   计数，直接断言「重跑 0 次网络请求」，不用计时阈值猜测。
+8. **文档**：`docs/keymap-k4.md`（对齐表 + 两处刻意偏离 + 组合键实现 + 未接绑定的组合键清单）。
+
+### 验证
+
+- 离线全绿：`make host-selftest`（quant HOST-OK + input combo selftest OK）、
+  `make host-lua-test`（progress / download_pure / reader_keys 三套 0 failure）、
+  `luac -p` 全量、`make weread` + `make weread-dyn` 交叉编译零新警告。
+- 真机待跑（设备离线）：`dk3_smoke.lua` + `--interactive` 键位手感验收。
+  **唯一离线不可验的假设**：真机 evdev 上 code 29 的 press/release 是否成对出现
+  （若只报 press，修饰键会粘住 → 需在 C 层加超时自动释放）。
+
+### 状态
+
+- 6 个提交（af3c702 → fa69a41）。推送仍阻塞：仓库无 remote，需用户给远端地址。
+- 两处刻意偏离（`Up/Down` 降级为翻页、`Press` 保留翻页）均一行可翻转，
+  `tests/reader_keys_test.lua` 会强制同步断言——真机手感不对时改这两处即可。
+
 ## 2026-11-19 · 离线代码审查修复批次（ub-mode + code-review）
 
 **目标**：全量审查 C 设备/桥接层（~1626 行）+ Lua 协议/加密/业务层（~3507 行），修复其中可离线完成的缺陷。无 🔴 阻断级；核心协议/加密层质量高（已由可工作的登录+书架链路实证）。
