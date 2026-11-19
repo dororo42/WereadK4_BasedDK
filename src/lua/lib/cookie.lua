@@ -1,6 +1,33 @@
 -- cookie.lua — 移植自 weread_K4.koplugin weread/lib/cookie.lua（cookie 合并/持久化语义）
 local Cookie = {}
 
+-- 会话 jar 只承认这两类名字：wr_* 与显式白名单。插件 credential_store
+-- 的加载期复校同款纪律——解析噪声/第三方 cookie 一律进不了 jar。
+Cookie.ALLOWED_NAMES = { ptcz = true, RK = true, pgv_pvid = true }
+
+function Cookie.is_session_name(name)
+    if type(name) ~= "string" then
+        return false
+    end
+    if name:match("^wr_[%w_]+$") then
+        return true
+    end
+    return Cookie.ALLOWED_NAMES[name] == true
+end
+
+-- 丢弃非法条目。幂等：合法 jar 过一遍逐字节不变。
+function Cookie.sanitize(cookies)
+    local clean = {}
+    for name, value in pairs(cookies or {}) do
+        if Cookie.is_session_name(name)
+           and type(value) == "string" and #value > 0 and #value <= 4096
+           and not value:find(";") and not value:find("[%c]") then
+            clean[name] = value
+        end
+    end
+    return clean
+end
+
 function Cookie.to_header(cookies)
     local parts = {}
     for key, value in pairs(cookies or {}) do
@@ -36,13 +63,8 @@ function Cookie.merge_set_cookie(cookies, set_cookie)
         end
         return cookies
     end
-    local allowed = {
-        ptcz = true,
-        RK = true,
-        pgv_pvid = true,
-    }
     for name, value in set_cookie:gmatch("([%w_]+)=([^;,\r\n]*)") do
-        if name:match("^wr_") or allowed[name] then
+        if Cookie.is_session_name(name) then
             if value == "" then
                 cookies[name] = nil
             else
