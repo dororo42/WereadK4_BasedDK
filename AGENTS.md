@@ -11,7 +11,8 @@
 ## Current Handoff
 
 - Latest: `handoffs/2026-11-19-111648-dk3-reading-keys-resume/HANDOFF.md`
-- Branch: main @ a5e6b61（DK-3 阅读侧 6 个提交 af3c702→a5e6b61 已落地；指针快照可能滞后，以 git log 为准）
-- Status: 代码就绪，等待设备恢复——真机验收（dk3_smoke + 键位手感）与 git push（仓库无 remote）双阻塞
+- Branch: main @ 07a7561（DK-3 阅读侧 6 个提交 af3c702→a5e6b61 已落地；指针快照可能滞后，以 git log 为准）
+- Remote: `origin` = https://github.com/dororo42/WereadK4_BasedDK （**public**，35 commits 已推送）
+- Status: 代码就绪且已公开推送；仅剩设备阻塞——真机验收（dk3_smoke + 键位手感）待 K4 上线
 
 任何 agent 开始工作前，先读上面的 HANDOFF.md。这份指针由 orbital_handoff 维护，手工交接时请同步更新。
