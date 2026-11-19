@@ -10,11 +10,10 @@
 
 ## Current Handoff
 
-- Latest: `handoffs/2026-11-19-111648-dk3-reading-keys-resume/HANDOFF.md`
-- Branch: main（DK-3 阅读侧 6 个提交 247d897→76c85c3 已落地。**不钉 SHA**：2026-11-19 做过一次历史改写，
-  改写前的所有 SHA 已失效，一律以 `git log` 为准）
-- Remote: `origin` = https://github.com/dororo42/WereadK4_BasedDK （**public**，38 commits）
-- Status: 代码就绪且已公开推送、历史已清洗（内网设备地址从全部提交中移除）；
-  仅剩设备阻塞——真机验收（dk3_smoke + 键位手感）待 K4 上线
+- Latest: `handoffs/2026-11-19-150713-dk3-device-acceptance-pending/HANDOFF.md`（本地 only，不入库）
+- Branch: main（2026-11-19 做过一次历史改写，改写前的所有 SHA 已失效；映射表见 `LOG.md`，一律以 `git log` 为准）
+- Remote: `origin` = https://github.com/dororo42/WereadK4_BasedDK （**public**：任何提交立刻公开，`git add` 前先 `git status` 复核）
+- Status: 正文链路已打通 —— 真机暴露 `dk3_smoke` 假绿，根因是 net.c 丢响应头（05bd524 修），
+  书架 8/8 本书已 spool 出真实正文；剩两项真机验收：键位手感（`--interactive`）与免扫码续期实测
 
 任何 agent 开始工作前，先读上面的 HANDOFF.md。这份指针由 orbital_handoff 维护，手工交接时请同步更新。

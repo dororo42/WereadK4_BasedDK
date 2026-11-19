@@ -1,5 +1,62 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-19 · 免扫码续期 + 会话持久化（照 weread_K4 插件补齐登录生命周期）
+
+**目标**：用户指示「不要扫码，可能触发风控，需要参考原 weread_K4 插件，做好登录的持久化」。
+上一批修完 `net.c` 丢响应头之后，`set-cookie` 首次真正进入 Lua——于是「任何响应都合并落盘」的老
+设计开始反复吃掉登录态。这一批解决的是会话生命周期，不只是补一个 renew。
+
+### 动作
+
+1. **唯一一次扫码**（按用户要求，之后不再）：`Auth.login` 走通，落盘后立刻检查 refreshToken 是否留存。
+2. **写盘路径审计**：全仓只有三处会写 `auth.json` —— `Api.request`（当时是无条件合并+落盘）、
+   `Auth._complete`、新增的 `Auth.renew`。第一处就是「重登一次又被探测脚本清空」的机制，也是风控面上
+   最危险的一处：一次匿名响应即可作废整个 jar。
+3. **cookie 条目门禁**（`src/lua/lib/cookie.lua` 新增 `is_session_name` + `sanitize`）：名称只允许
+   `wr_*` 加 ptcz/RK/pgv_pvid，值不得含 `;`/控制字符、上限 4096 字节；幂等（合法 jar 过一遍不变）。
+   删除语义（`name=` 空值）保持标准行为——安全性挪到调用层，而不是改契约。
+4. **根因**：`auth.lua` 的 `jar_request` 把扁平 jar 当 `auth` 传给 `Api.request`，而后者约定
+   `auth = {cookies=…}`，于是 `auth.cookies = merged` 在 jar 里写出一个名为 `cookies` 的伪 cookie 并
+   跟着 Cookie 头出站。源头改 `opts.auth = { cookies = jar }`，另在 `Api.load_auth` 边界一次性
+   sanitize 作纵深防御（插件 credential_store 加载期复校同款）。真机已验证该伪条目消失。
+5. **单一写入口**（`src/lua/api.lua`）：只有「2xx 且合并后仍是可用会话」才写盘——判据用
+   `Cookie.has_login_cookie` 对新旧 jar 各算一次，因此登录中途（还没有会话）不受限制、合法轮换照常
+   生效，而降级/匿名响应不再触盘。
+6. **只读派生请求**（`src/lua/download.lua fetch_psvts`）：reader 页不再合并响应 cookie、不再落盘；
+   同时补上 UA——此前不带 UA 落到 `net.c` 默认 `WereadK4/0.1`，与正文 POST 的 Edge UA 在同一会话里
+   呈现两种客户端身份，插件 `migrations.lua:11` 明确把这列为风控触发面。
+7. **`wr_rt` 留存**：`poll_once` 从拼接串改为返回凭据表（带 refresh），`_complete` 把 `refreshToken`
+   urlencode 后存进 `cookies.wr_rt`。此前直接丢弃 → web 域一过期只能重扫（正是用户要避免的事）。
+   真机 `wr_rt` 28 字符已在盘。
+8. **免扫码续期**（`src/lua/auth.lua` 新增纯函数 `classify_renewal` + `renew`）：四态
+   `network / expired / replaced / stale`。只有 `replaced|stale` 增量收紧落盘（过 `is_session_name`），
+   失败分支什么都不改——插件 `client.lua:692-710` 纪律：network/stale 绝不清凭据，只有真 expired
+   才允许要求重扫。冷却 600s，被动续期不打成心跳。
+9. **空分片自愈**（`src/lua/download.lua`）：`EMPTY-SHARD` 由「静默返回空」改为硬失败 → 触发一次
+   `Auth.renew()` → 重试。会话过期的表现从「整本书只剩标题」变成「续期一次后拿到正文」。
+10. **断言硬化**（`src/lua/dk3_smoke.lua`）：批 3→5，`spool has content` 换成
+    `spool has real chapter body`（正文须明显长于标题）。缺的正是这条断言，才让上一轮 8/8 假绿。
+11. **门槛校准**：插件的 16 字符门槛在本机全线误报。裸探测（`/tmp/probe_renew.lua`，一次性脚本）显示
+    `status=200 body={"succ":1}` 且轮换回来的 `wr_skey` 只有 **8** 字符——续期其实成功，是被照搬过来的
+    阈值判死。改 `Auth.RENEW_MIN_SKEY_LEN = 8` 与 `has_login_cookie` 同源，并加测试禁止两者在
+    「会丢活会话」的方向上不一致。
+
+### 验证
+
+- 主机 5 套全绿：新增 `tests/cookie_test.lua`（名/值门禁、幂等、Path/Domain 忽略、按名删除、门槛）与
+  `tests/renew_test.lua`（9 组四态 + 冷却下限 + 门槛同源）。
+- 真机（改阈值前）：jar 名 `wr_fp wr_ql wr_rt wr_skey wr_vid`；伪 `cookies` 条目消失；`has_login` true；
+  取章 2814 字节 HAS-BODY；`renew()` 之后 `has_login` 仍 true（凭据没被吃掉——这条是本批的核心不变量）。
+- **未竟**：阈值修正后的真机 `renew()` 复测（期望 `replaced` 且 `wr_skey` 轮换落盘）——设备已掉线
+  （`no route to host`），主机侧已复核但真机结论留待下一批。
+
+### 状态
+
+代码 + 测试就绪，未 push。待办：① 设备上线复测 `renew()` = `replaced`；② 键位手感验收
+（`tools/deploy-weread.sh --interactive`）仍未做；③ 探测脚本仍留在设备 `/mnt/us/weread/lua/`，
+`auth.json.prelogin-1910` / `bak-1926` / `pre-renew-test` 备份待用户决定去留。
+
+
 ## 2026-11-19 · 真机验收发现正文为空 → 修掉 net.c 两个响应头 bug（会话cookie从不刷新）
 
 **目标**：用户告知 K4 上线，要求「进行必要的测试」，把 DK-3 积压的真机数据面验收跑完。
