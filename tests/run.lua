@@ -1,7 +1,7 @@
 -- 主机侧 Lua 单测 runner（lua5.1）：make host-lua-test，须在仓库根目录执行。
 -- 只收无设备依赖的纯逻辑模块：主机上不存在 wr.* C 绑定，模块「加载期」不调用
 -- wr 才可以进来（函数体内调用无妨，单测不走那些路径）。
-package.path = "src/lua/lib/?.lua;src/lua/?.lua;" .. package.path
+package.path = "src/lua/lib/?.lua;src/lua/?.lua;tests/?.lua;" .. package.path
 
 math.randomseed(os.time())
 
@@ -13,6 +13,7 @@ local suites = {
     "renew_test",
     "report_position_test",
     "report_retry_test",
+    "position_golden_test",
 }
 
 local total = 0
