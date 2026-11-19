@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <poll.h>
+#include <time.h>
 #include <errno.h>
 #include <stddef.h>
 #include <string.h>
@@ -71,6 +72,18 @@ const char *wr_key_name(uint16_t code)
     return NULL;
 }
 
+/* 修饰键 latch 的超时判据（纯函数，主机可测）：真机 code 29 可能不报 release
+ * （键位手感验收预案，docs/keymap-k4.md §五）——距按下 >800ms 即视为已被释放，
+ * 否则之后每一次普通按键都被拼成组合键。press_ms<0 = 未按下，恒不过期。 */
+#define WR_MOD_TIMEOUT_MS 800L
+
+int wr_mod_expired(long now_ms, long press_ms)
+{
+    if (press_ms < 0)
+        return 0;
+    return (now_ms - press_ms) > WR_MOD_TIMEOUT_MS;
+}
+
 const char *wr_key_combo(uint16_t code, int mod_held, char *buf, size_t buflen)
 {
     const char *base = wr_key_name(code);
@@ -89,6 +102,7 @@ int wr_input_open(struct wr_input *in)
     int i;
     in->ndev = 0;
     in->mod_held = 0;
+    in->mod_press_ms = -1;
     for (i = 0; i < WR_IN_MAXDEV; i++) {
         int one = 1;
         int fd = open(kDevs[i], O_RDONLY | O_NONBLOCK | O_CLOEXEC);
@@ -118,11 +132,23 @@ void wr_input_close(struct wr_input *in)
 int wr_input_poll(struct wr_input *in, int timeout_ms, const char **name,
                   int ignore_repeat)
 {
+    long now_ms = -1;
     struct pollfd pfd[WR_IN_MAXDEV];
     int i, pr;
 
     if (in->ndev <= 0)
         return -1;
+
+    /* latch 超时：即使 code 29 不报 release，超过时限也自动释放（防组合键粘住） */
+    {
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        now_ms = ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+        if (in->mod_held && wr_mod_expired(now_ms, in->mod_press_ms)) {
+            in->mod_held = 0;
+            in->mod_press_ms = -1;
+        }
+    }
 
     for (i = 0; i < in->ndev; i++) {
         pfd[i].fd = in->fds[i];
@@ -148,10 +174,13 @@ int wr_input_poll(struct wr_input *in, int timeout_ms, const char **name,
             /* 修饰键 latch：press/release 只更新状态，自身不产出事件（同 KOReader）。
              * 必须排在下面的 release 过滤之前，否则抬起被丢弃 → 修饰键粘住。 */
             if (ev.code == WR_KEY_MOD_CODE) {
-                if (ev.value == WR_KEY_PRESS)
+                if (ev.value == WR_KEY_PRESS) {
                     in->mod_held = 1;
-                else if (ev.value == WR_KEY_RELEASE)
+                    in->mod_press_ms = now_ms;
+                } else if (ev.value == WR_KEY_RELEASE) {
                     in->mod_held = 0;
+                    in->mod_press_ms = -1;
+                }
                 continue;
             }
             if (ev.value == WR_KEY_REPEAT && ignore_repeat)
@@ -185,6 +214,15 @@ int main(void)
         }                                                               \
     } while (0)
 
+#define EXPECT_INT(expr, want) do {                                     \
+        long got_ = (long)(expr);                                       \
+        if (got_ != (long)(want)) {                                     \
+            printf("FAIL %s => %ld (want %ld)\n", #expr, got_,          \
+                   (long)(want));                                       \
+            fail = 1;                                                   \
+        }                                                               \
+    } while (0)
+
     EXPECT_STR(wr_key_name(103), "Up");
     EXPECT_STR(wr_key_combo(103, 0, buf, sizeof buf), "Up");
     EXPECT_STR(wr_key_combo(103, 1, buf, sizeof buf), "ScreenKBPlusUp");
@@ -195,6 +233,10 @@ int main(void)
     /* 无缓冲 / 零长度：降级为基名，不越界写 */
     EXPECT_STR(wr_key_combo(103, 1, NULL, 0), "Up");
     EXPECT_STR(wr_key_combo(103, 1, buf, 0), "Up");
+    /* latch 超时判据（纯函数 wr_mod_expired）：未按下恒不过期；<800ms 不过期；>800ms 过期 */
+    EXPECT_INT(wr_mod_expired(5000L, -1), 0);
+    EXPECT_INT(wr_mod_expired(5700L, 5000L), 0);
+    EXPECT_INT(wr_mod_expired(5801L, 5000L), 1);
     /* 未知 code：不产出名字 */
     if (wr_key_combo(9999, 1, buf, sizeof buf) != NULL) {
         printf("FAIL unknown code produced a name\n");

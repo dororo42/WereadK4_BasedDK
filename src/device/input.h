@@ -35,6 +35,7 @@ struct wr_input {
     /* 修饰键 latch：必须跨设备——ScreenKB 来自 event0(tequila-keypad)，
      * D-pad 来自 event1(fiveway)，两者不在同一 fd 上。 */
     int mod_held;
+    long mod_press_ms;            /* 修饰键按下时刻（CLOCK_MONOTONIC ms），latch 超时释放用 */
     char combo[WR_IN_COMBO_LEN];  /* wr_key_combo 的拼装缓冲，下次 poll 前有效 */
 };
 

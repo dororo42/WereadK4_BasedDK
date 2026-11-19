@@ -36,29 +36,48 @@ Reader.KEY_PREV_CH   = { Left = true }
 Reader.KEY_TOC       = { Menu = true, ScreenKBPlusDown = true, ScreenKBPlusUp = true }
 Reader.KEY_EXIT      = { Back = true, Home = true }
 
--- UTF-8 安全折行：贪心填行（font_width 逐前缀测量）
-local function wrap_line(ft, maxw, line)
+-- UTF-8 按字符切分（宽松版：非法序列按 1 字节吞掉，保证永远前进不丢字节）。
+-- 宽度首字节判长与 protocol.utf8_substr 同源。
+local function utf8_chars(line)
+    local chars = {}
+    local i, n = 1, #line
+    while i <= n do
+        local b = line:byte(i)
+        local w = 1
+        if b >= 0xF0 then w = 4
+        elseif b >= 0xE0 then w = 3
+        elseif b >= 0xC2 and b <= 0xDF then w = 2
+        end
+        chars[#chars + 1] = line:sub(i, i + w - 1)
+        i = i + w
+    end
+    return chars
+end
+
+-- UTF-8 安全折行：字符域贪心（measure 依赖注入，主机侧可测）。
+-- 历史 bug（code review 🔴）：旧版 pos 按字节推进、fit 按字符计数，中文行超宽时
+-- 切进多字节字符中间——ASCII 恰好字节=字符而漏过测试。本版在字符数组上工作，
+-- 单字符超宽也强制收进一行（不死循环、不丢字）。
+-- measure(candidate_string) 返回像素宽度；设备路径传 wr.font_width 绑定。
+function Reader.wrap_line(measure, maxw, line)
     local rows = {}
-    local pos = 1
-    local n = #line
-    while pos <= n do
-        local lo, hi = pos, n
-        -- 二分找最大可容纳 UTF-8 前缀
-        local fit = pos
-        while lo <= hi do
-            local mid = math.floor((lo + hi) / 2)
-            local head = WeRead.utf8_substr(line:sub(pos), mid - pos + 1)
-            local w = wr.font_width(ft, head)
+    local chars = utf8_chars(line)
+    local i = 1
+    while i <= #chars do
+        local j = i
+        local last_fit = i
+        while j <= #chars do
+            local cand = table.concat(chars, "", i, j)
+            local w = measure(cand)
             if w and w <= maxw then
-                fit = mid
-                lo = mid + 1
+                last_fit = j
+                j = j + 1
             else
-                hi = mid - 1
+                break
             end
         end
-        local head = WeRead.utf8_substr(line:sub(pos), fit - pos + 1)
-        rows[#rows + 1] = head
-        pos = fit + 1
+        rows[#rows + 1] = table.concat(chars, "", i, last_fit)
+        i = last_fit + 1
     end
     return rows
 end
@@ -71,7 +90,9 @@ function Reader.layout(ft, maxw, text)
         if line == "" then
             rows[#rows + 1] = ""
         else
-            for _, r in ipairs(wrap_line(ft, maxw, line)) do
+            for _, r in ipairs(Reader.wrap_line(function(s)
+                    return wr.font_width(ft, s)
+                end, maxw, line)) do
                 rows[#rows + 1] = r
             end
         end

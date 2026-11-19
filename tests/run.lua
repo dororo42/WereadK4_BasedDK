@@ -16,6 +16,7 @@ local suites = {
     "position_golden_test",
     "api_jar_test",
     "crypto_test",
+    "wrap_test",
 }
 
 local total = 0

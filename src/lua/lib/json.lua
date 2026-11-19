@@ -264,6 +264,9 @@ function Json.write_atomic(path, value)
         os.remove(tmp)
         return nil, rerr
     end
+    -- 掉电补强：K4 本批实测三次掉电，rename 后（page cache 未回写）掉电会丢
+    -- 刚写入的凭据/进度。写频低（登录/换章/退出），全量 sync 的秒级阻塞可接受。
+    os.execute("sync")
     return true
 end
 
