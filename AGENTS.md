@@ -10,10 +10,10 @@
 
 ## Current Handoff
 
-- Latest: `handoffs/2026-11-19-150713-dk3-device-acceptance-pending/HANDOFF.md`（本地 only，不入库）
-- Branch: main（2026-11-19 做过一次历史改写，改写前的所有 SHA 已失效；映射表见 `LOG.md`，一律以 `git log` 为准）
-- Remote: `origin` = https://github.com/dororo42/WereadK4_BasedDK （**public**：任何提交立刻公开，`git add` 前先 `git status` 复核）
-- Status: 正文链路已打通 —— 真机暴露 `dk3_smoke` 假绿，根因是 net.c 丢响应头（05bd524 修），
-  书架 8/8 本书已 spool 出真实正文；剩两项真机验收：键位手感（`--interactive`）与免扫码续期实测
+- Latest: `handoffs/2026-11-19-201146-dk3-login-persistence-device-recheck/HANDOFF.md`
+- Branch: main @ 38a0ba0（2026-11-19 做过历史改写，改写前 SHA 已失效；映射表见 `LOG.md`）
+- Status: 等待设备 + 等待 push 决策 —— 正文链路与会话持久化已落地（`origin/main` 之上 7 个提交，**未 push**）；
+  真机只剩两项：① 免扫码续期复测（`Auth.renew(true)` 期望 `replaced`）② 键位手感验收（`--interactive`）。
+  **硬约束：绝不重复扫码（风控）——登录态只能靠 `wr_rt` 续期，动网络路径前先备份设备上的 auth.json。**
 
 任何 agent 开始工作前，先读上面的 HANDOFF.md。这份指针由 orbital_handoff 维护，手工交接时请同步更新。
