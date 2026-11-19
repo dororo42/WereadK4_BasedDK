@@ -73,6 +73,11 @@ $(BUILD)/weread-dyn: $(WEREAD_SRCS) src/device/net.c $(WEREAD_HDRS) src/device/n
 host-selftest:
 	@mkdir -p $(BUILD)
 	gcc -Isrc/device -o $(BUILD)/quant_test -DWR_QUANT_TEST_MAIN src/device/fb.c && $(BUILD)/quant_test && echo HOST-OK
+	gcc -std=gnu99 -Wall -Wextra -Isrc/device -o $(BUILD)/input_test -DWR_INPUT_TEST_MAIN src/device/input.c && $(BUILD)/input_test && echo INPUT-OK
+
+# 主机侧 Lua 单测（lua5.1，纯逻辑模块：progress / download 无设备依赖部分）
+host-lua-test:
+	lua5.1 tests/run.lua
 
 clean:
 	rm -rf $(BUILD)

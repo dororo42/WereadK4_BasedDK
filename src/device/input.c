@@ -1,4 +1,8 @@
-/* input.c — K4 evdev 输入层实现。键码映射源自 KOReader event_map_kindle4.lua（设备实测）。 */
+/* input.c — K4 evdev 输入层实现。键码映射源自 KOReader event_map_kindle4.lua（设备实测）。
+ *
+ * ScreenKB(code 29) 是修饰键：wr_input_poll 内部 latch 其按下/抬起，并把它与其他键
+ * 拼成 KOReader 同款组合事件名（ScreenKBPlusUp 等），修饰键自身不产出事件。
+ * latch 挂在 struct wr_input 上（跨设备：code 29 在 event0，D-pad 在 event1）。 */
 #include "input.h"
 
 #include <fcntl.h>
@@ -6,7 +10,13 @@
 #include <poll.h>
 #include <errno.h>
 #include <stddef.h>
+#include <string.h>
+#include <stdio.h>
 #include <sys/ioctl.h>
+
+#ifdef WR_INPUT_TEST_MAIN
+#include <assert.h>
+#endif
 
 /* EVIOCGRAB：独占抓取 evdev 设备。前台全屏应用必须抓取，否则原生系统
  * （cvm/framework）会同时读键并重绘盖屏——与 KOReader 抢占同款机制。
@@ -49,7 +59,7 @@ static const struct kmap kMap[] = {
     { 109, "RPgBack" },
     { 191, "RPgFwd"  },
     { 193, "LPgBack" },
-    {  29, "ScreenKB"},
+    {  29, "ScreenKB"},  /* 修饰键：poll 内 latch，见 wr_key_combo */
 };
 
 const char *wr_key_name(uint16_t code)
@@ -61,10 +71,24 @@ const char *wr_key_name(uint16_t code)
     return NULL;
 }
 
+const char *wr_key_combo(uint16_t code, int mod_held, char *buf, size_t buflen)
+{
+    const char *base = wr_key_name(code);
+    if (!base)
+        return NULL;
+    if (!mod_held)
+        return base;
+    if (!buf || buflen == 0)
+        return base;  /* 无缓冲可用时降级为基名，绝不写越界 */
+    snprintf(buf, buflen, "ScreenKBPlus%s", base);
+    return buf;
+}
+
 int wr_input_open(struct wr_input *in)
 {
     int i;
     in->ndev = 0;
+    in->mod_held = 0;
     for (i = 0; i < WR_IN_MAXDEV; i++) {
         int one = 1;
         int fd = open(kDevs[i], O_RDONLY | O_NONBLOCK | O_CLOEXEC);
@@ -121,16 +145,73 @@ int wr_input_poll(struct wr_input *in, int timeout_ms, const char **name,
         while ((n = read(in->fds[i], &ev, sizeof(ev))) == (ssize_t)sizeof(ev)) {
             if (ev.type != WR_EV_KEY)
                 continue;
+            /* 修饰键 latch：press/release 只更新状态，自身不产出事件（同 KOReader）。
+             * 必须排在下面的 release 过滤之前，否则抬起被丢弃 → 修饰键粘住。 */
+            if (ev.code == WR_KEY_MOD_CODE) {
+                if (ev.value == WR_KEY_PRESS)
+                    in->mod_held = 1;
+                else if (ev.value == WR_KEY_RELEASE)
+                    in->mod_held = 0;
+                continue;
+            }
             if (ev.value == WR_KEY_REPEAT && ignore_repeat)
                 continue;  /* 忽略 auto-repeat，只认首次按下 */
             if (ev.value != WR_KEY_PRESS && ev.value != WR_KEY_REPEAT)
                 continue;
-            const char *nm = wr_key_name(ev.code);
+            const char *nm = wr_key_combo(ev.code, in->mod_held,
+                                          in->combo, sizeof(in->combo));
             if (nm) {
-                if (name) *name = nm;
+                if (name) *name = nm;  /* 指向 in->combo 时仅在下次 poll 前有效 */
                 return 1;
             }
         }
     }
     return 0;
 }
+
+#ifdef WR_INPUT_TEST_MAIN
+/* 主机侧：make host-selftest —— 只验组合键名拼装（纯函数，不碰 evdev/设备节点）。 */
+int main(void)
+{
+    char buf[WR_IN_COMBO_LEN];
+    int fail = 0;
+
+#define EXPECT_STR(expr, want) do {                                     \
+        const char *got_ = (expr);                                      \
+        if (!got_ || strcmp(got_, (want)) != 0) {                       \
+            printf("FAIL %s => %s (want %s)\n", #expr,                  \
+                   got_ ? got_ : "(null)", (want));                     \
+            fail = 1;                                                   \
+        }                                                               \
+    } while (0)
+
+    EXPECT_STR(wr_key_name(103), "Up");
+    EXPECT_STR(wr_key_combo(103, 0, buf, sizeof buf), "Up");
+    EXPECT_STR(wr_key_combo(103, 1, buf, sizeof buf), "ScreenKBPlusUp");
+    EXPECT_STR(wr_key_combo(108, 1, buf, sizeof buf), "ScreenKBPlusDown");
+    EXPECT_STR(wr_key_combo(28,  1, buf, sizeof buf), "ScreenKBPlusPress");
+    /* 最长基名 ScreenKB(8) → 组合名 20 字符 + NUL，须装进 24 字节缓冲 */
+    EXPECT_STR(wr_key_combo(29,  1, buf, sizeof buf), "ScreenKBPlusScreenKB");
+    /* 无缓冲 / 零长度：降级为基名，不越界写 */
+    EXPECT_STR(wr_key_combo(103, 1, NULL, 0), "Up");
+    EXPECT_STR(wr_key_combo(103, 1, buf, 0), "Up");
+    /* 未知 code：不产出名字 */
+    if (wr_key_combo(9999, 1, buf, sizeof buf) != NULL) {
+        printf("FAIL unknown code produced a name\n");
+        fail = 1;
+    }
+    /* 缓冲过小：snprintf 截断但必须 NUL 结尾且写不出缓冲 */
+    {
+        char tiny[8];
+        const char *r = wr_key_combo(103, 1, tiny, sizeof tiny);
+        if (r != tiny || strlen(tiny) >= sizeof tiny) {
+            printf("FAIL truncation not NUL-terminated in-bounds\n");
+            fail = 1;
+        }
+    }
+
+    if (!fail)
+        printf("input combo selftest OK\n");
+    return fail;
+}
+#endif

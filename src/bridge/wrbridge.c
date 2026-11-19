@@ -204,7 +204,9 @@ static int l_input_close(lua_State *L)
 }
 
 /* input_poll([timeout_ms=-1[, ignore_repeat=false]]) -> 键名字符串 | nil(超时/无合格键)
- * ignore_repeat=true 时跳过 auto-repeat，只认首次按下（菜单交互防长按重复触发）。 */
+ * ignore_repeat=true 时跳过 auto-repeat，只认首次按下（菜单交互防长按重复触发）。
+ * 按住 ScreenKB(面板 Keyboard 键) 时返回组合名 "ScreenKBPlus<Key>"（对齐 KOReader
+ * hotkeys 事件名，如 ScreenKBPlusUp）；修饰键自身不产出事件。 */
 static int l_input_poll(lua_State *L)
 {
     int timeout = (int)luaL_optinteger(L, 1, -1);

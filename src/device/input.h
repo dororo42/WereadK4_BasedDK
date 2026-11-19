@@ -13,6 +13,7 @@
 #define WR_INPUT_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 #define WR_IN_MAXDEV 2
 
@@ -21,14 +22,29 @@
 #define WR_KEY_PRESS   1
 #define WR_KEY_REPEAT  2
 
+/* 修饰键（K4 面板 Keyboard 键，evdev code 29）。KOReader 里它是组合键前缀
+ * （ScreenKB+Up=目录 等，见 weread_K4 README.md:82-88），自身不产出事件。 */
+#define WR_KEY_MOD_CODE 29
+/* 组合名缓冲："ScreenKBPlus" (12) + 最长基名 "ScreenKB"(8) + NUL */
+#define WR_IN_COMBO_LEN 24
+
 struct wr_input {
     int fds[WR_IN_MAXDEV];
     int grabbed[WR_IN_MAXDEV];  /* 对应 fd 是否已被本进程 EVIOCGRAB 独占 */
     int ndev;
+    /* 修饰键 latch：必须跨设备——ScreenKB 来自 event0(tequila-keypad)，
+     * D-pad 来自 event1(fiveway)，两者不在同一 fd 上。 */
+    int mod_held;
+    char combo[WR_IN_COMBO_LEN];  /* wr_key_combo 的拼装缓冲，下次 poll 前有效 */
 };
 
 /* evdev code -> 逻辑键名（与 KOReader event_map_kindle4 对齐）；未知返回 NULL。 */
 const char *wr_key_name(uint16_t code);
+
+/* code -> 键名，mod_held!=0 时产出组合名 "ScreenKBPlus<Key>"（写入 buf 并返回 buf；
+ * 事件名对齐 KOReader hotkeys.koplugin 的 ScreenKBPlusDown）。无修饰时直接返回
+ * wr_key_name 的静态串，不碰 buf。未知 code 返回 NULL。 */
+const char *wr_key_combo(uint16_t code, int mod_held, char *buf, size_t buflen);
 
 int  wr_input_open(struct wr_input *in);
 void wr_input_close(struct wr_input *in);
