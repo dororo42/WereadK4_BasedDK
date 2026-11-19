@@ -1,5 +1,76 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-19 · DK-3.5 阅读上报落地：签名面真机被收下，位置逐字节落盘（零位移验收）
+
+**目标**：设备在线而键位验收需要人，就趁这个窗口把 DK-3 之后唯一不需要人按键的项做完——
+`read_report`（原语 `make_read_payload` 自 DK-2 起就是零调用方）。
+
+### 动作
+
+1. **先取证语义**（不猜协议）：插件 `weread/lib/position_mapper.lua:186-209` 定下两条换算——
+   `chapterOffset` 是**章内字数偏移**（以目录 `wordCount` 为上界，不是字节数），
+   `progress` 是 `(前序章字数 + 本章偏移) / 全书字数` 四舍五入到整数点；
+   `weread/lib/reader_state.lua:29-31` 证明 psvts/pclts/token 三件本应从同一张 reader 页一起抽。
+   端点只有 `POST /web/book/read`——没有独立的 setprogress，位置随时报一起落。
+2. **架构取舍：不做心跳**。插件是 30s 心跳 + 调度器 + 积压补报；本客户端单进程无异步，
+   心跳会把网络请求打进翻页关键路径（K4 弱网一次往返数秒，手感直接变卡），且规律定时流量
+   在服务端是风控面（与「UA 必须同源」同一个道理）。改成**离开一章时发一次**，
+   `rt` 取该段墙上时间并夹到 30s（服务端只吃小步 rt，大值被静默丢弃）。
+3. TDD：`tests/report_position_test.lua` 先跑红（`module 'report' not found`）再实现
+   `src/lua/report.lua`。8 组断言里三条是「必须失败」的：章不在目录时不得悄悄按第 1 章上报
+   （那会把服务端位置拽回开头）、`wordCount=0` 不得除零、越界页码必须夹进合法区间。
+4. **减法优先**：不新增凭据写入口——上报走已受门禁的 `Api.request`，`CRED-WRITERS-OK (3)` 未放宽；
+   不动 `reader.lua`（`sm` 摘要留空，代价只是服务端「最近阅读」少一句片段，不值得为它加一条页首行回传）。
+   `download.fetch_psvts` 只加**第三个返回值**（整份 reader state），老调用点与
+   `dk3_smoke` 的按名计数都不受影响。
+5. **动网络前先备份**：`auth.json` → `auth.json.bak-report`（设备 data 下第 4 份备份）。
+6. **验收件刻意做成零位移**（`src/lua/read_report_smoke.lua`）：上报用的是**服务端当前的位置**
+   而不是本地进度，所以不挪用户的阅读位置；报完回读 `/book/getprogress` 对账，因为只断言
+   `accepted` 会被「回 succ 但不写」糊过去（net.c 那次假绿的教训）；选书只挑「服务端已有位置」的第一本，
+   找不到就退出而不是造假数据。
+7. 真机结果（首跑 `read_report smoke: 0 failure(s)`，8 项全 PASS）：`sg`/`s` 签名面被收下
+   （token 从 reader 页实抽，29 字符）；`ci=15 co=1908 pr=96` 回读**逐字节相同**；
+   `pclts` 该书页面上没有 → 沿用插件的 `e(now)` 兜底，不算失败；
+   本地字数换算与服务端 percent 相差 3 个点（99 vs 96，页码取整方向所致），在容忍内。
+   如实记一条：这次验收带了 `rt=30`，服务端该书的阅读时长统计多了 30 秒（位置未动）。
+
+### 排查记录：`cmp` 把我误导成「凭据被删」，真判据在 Lua 层
+
+1. 我写「`auth.json` 与备份逐字节相同 ⇒ 会话没被动过」，实测 `cmp -s` 全部 **DIFF**，
+   第一反应是 `Set-Cookie: wr_rt=`（空值删除）把 refreshToken 吃掉了——那等于只剩重扫码。
+2. 逐条查下来两个结论都与猜测相反：
+   * 备份之间本来就该不同（`bak-recheck`→`bak-report` 之间跑过一次 `renew(force)`，
+     轮换 `wr_skey` 并补发 `wr_pf`，5 项 → 6 项）；
+   * **`Json.encode` 的键序随 `pairs` 抖动**，同一份会话也能比出 DIFF。
+     `cmp` 只能证「字节序列不同」，永远不能证「凭据增减」——这条判据从一开始就是错的。
+3. 权威读数用 Lua 层：`Cookie.sanitize` 后取**条目名 + 值长度 + has_login_cookie**，
+   当前盘面 `n=6 [wr_fp=10 wr_pf=9 wr_ql=1 wr_rt=28 wr_skey=8 wr_vid=8] login=true`，
+   与 `bak-report` 完全一致 → 上报路径（含其响应）没有改动 jar 内容。
+   我那条 BusyBox grep 之所以显示 5 项，是因为 `tr ',' '\n'` 把含逗号的 cookie 值切断了；
+   **BusyBox 文本切分不是会话读数**，别再用它判 cookie 数量。
+4. 把结论做成机器断言：`read_report_smoke.lua` 增第 4 组——跑完一遍必须
+   `has_login==true` 且 `wr_rt >= 8`（丢了就只剩重扫码），并把 `header_unchanged`
+   作为信息打印（合法轮换会改它，所以不断言相等，只断言会话仍可用）。
+5. **一条纪律违例，如实记录**：我为查值长度写的 `awk -F\"` 字段序号写错，把若干条 cookie
+   的**真值打印到了本机终端**。值只出现在本机这次会话输出里，未进任何文件、提交、交接文档；
+   正确写法就是上面第 3 条（名字 + 长度 + 布尔）。以后探测凭据盘面一律走 Lua 层指纹，
+   不在 shell 里切 JSON。
+
+### 验证
+
+- 主机：`make host-lua-test` → 6 套全绿 + `CRED-WRITERS-OK (3)`；`luac -p` 全过；先红后绿可复现。
+- 设备：`tools/deploy-weread.sh` → `PIXEL-CHECK PASS`；`read_report_smoke.lua` 加上会话不变量组后
+  复跑 **10 项全 PASS**，其中 offset/percent 两条是**回读对账**而非请求返回码，
+  `header_unchanged=true` 证明上报路径没动 jar。
+- 会话不变量：`Api.has_login()` 与 `Cookie.has_login_cookie` 全程 true，`wr_rt` 28 字符未丢。
+- 全程未扫码。
+
+### 状态
+
+DK-3.5 的服务端写入面已打通并证明落盘。两处待办：① `menu.read_book` 里的接线只做了静态核对
+（`Report.send` 入参形状与 `sess.psvts/pclts/token` 来源），它要随键位手感验收在同一次真实阅读里
+跑到——那需要人按键；② 本批与之前各批的提交仍未 push，等用户点头。
+
 ## 2026-11-19 · 真机验收跑绿：续期=replaced、正文可用；并更正「设备离线」是我的探测写错
 
 **目标**：用户指出「真机一直在线」，把持久化批次唯一未取证的一项（免扫码续期真机复测）跑完，
