@@ -21,12 +21,6 @@ Auth.POLL_TIMEOUT = 3
 Auth.LOGIN_URL = Api.BASE_URL .. "/web/confirm?uid="
 Auth.FP_PATH = "/mnt/us/weread/data/device_fp"
 
-local function shallow_copy(t)
-    local r = {}
-    for k, v in pairs(t or {}) do r[k] = v end
-    return r
-end
-
 ------------------------------------------------------------------ QR 渲染（暴露给 login.lua / menu.lua 复用）
 
 -- URL → QR 矩阵。返回 ok, matrix | nil, err
@@ -159,7 +153,10 @@ end
 
 local function jar_request(jar, opts)
     opts = opts or {}
-    opts.auth = jar
+    -- Api.request 约定 auth 是 {cookies=…, api_key=…, account=…}；这里曾直接把
+    -- 扁平 jar 当 auth 传入，于是 Api.request 的 `auth.cookies = merged` 在 jar
+    -- 里写出了一个名为 "cookies" 的伪 cookie，并跟着 Cookie 头出站。
+    opts.auth = { cookies = jar }
     opts.no_save = true                     -- 登录中途不落盘
     local data, status, resp_headers = Api.request(opts)
     if resp_headers and resp_headers["set-cookie"] then
@@ -170,7 +167,8 @@ local function jar_request(jar, opts)
     return data, status
 end
 
--- 轮询一次。返回 "done:<vid>:<token>" | "expired" | "otp:<code>" | "waiting" | "timeout:<err>"
+-- 轮询一次。返回 "done" + 凭据表 | "expired" | "otp:<code>" | "waiting" | "timeout:<err>"
+-- 凭据表带 refresh：它是唯一能免扫码续期的东西，丢了就得重扫二维码。
 function Auth.poll_once(uid, jar)
     local url = Api.BASE_URL .. "/api/auth/getLoginInfo?uid="
         .. WeRead.urlencode(uid) .. "&otp="
@@ -183,7 +181,11 @@ function Auth.poll_once(uid, jar)
         return "timeout:" .. tostring(err)   -- 网络抖动按 pending 处理（插件 U17-1）
     end
     if data.succeed == true or tonumber(data.succeed) == 1 then
-        return "done:" .. tostring(data.webLoginVid or "") .. ":" .. tostring(data.accessToken or "")
+        return "done", {
+            vid = tostring(data.webLoginVid or ""),
+            token = tostring(data.accessToken or ""),
+            refresh = type(data.refreshToken) == "string" and data.refreshToken or "",
+        }
     end
     local logic = tostring(data.logicCode or "")
     if logic == "LOGIN_TIMEOUT" then
@@ -219,7 +221,7 @@ function Auth.login(display_cb, progress_cb)
     -- 3) 轮询（Back 取消；过期自动重取 uid 重画）
     local deadline = os.time() + 300
     while os.time() < deadline do
-        local r = Auth.poll_once(uid, jar)
+        local r, cred = Auth.poll_once(uid, jar)
         if wr.input_open then
             local key = wr.input_poll(0, true)
             if key == "Back" or key == "Menu" or key == "Home" then
@@ -240,14 +242,14 @@ function Auth.login(display_cb, progress_cb)
             else
                 return nil, "刷新二维码失败"
             end
-        elseif type(r) == "string" and r:sub(1, 5) == "done:" then
-            local vid = r:match("^done:([^:]+):")
-            local token = r:match("^done:[^:]+:(.+)$")
-            if not vid or vid == "" or not token or token == "" then
+        elseif r == "done" then
+            local vid = cred and cred.vid or ""
+            local token = cred and cred.token or ""
+            if vid == "" or token == "" then
                 return nil, "登录响应缺少凭据"
             end
             progress_cb("扫码成功，获取账号信息…")
-            local account, cerr = Auth._complete(vid, token, jar)
+            local account, cerr = Auth._complete(vid, token, jar, cred.refresh)
             if account then return account end
             if cerr == "no_apikey" then
                 return nil, "未获取到 API Key：该账号未开通微信读书 Skill" ..
@@ -271,7 +273,7 @@ function Auth.login(display_cb, progress_cb)
 end
 
 -- 登录完成：userInfo → apikeyGet（全 jar + X-Vid/X-Skey）→ 落盘（插件 _complete_protocol 语义）
-function Auth._complete(vid, token, jar)
+function Auth._complete(vid, token, jar, refresh_token)
     local auth_headers = {
         ["Referer"] = Api.SKILLS_PAGE_URL,
         ["X-Vid"] = vid,
@@ -303,12 +305,17 @@ function Auth._complete(vid, token, jar)
 
     -- jar + 凭据落盘（新 jar 起底，防旧账号泄漏——插件同款）
     local store = Api.load_auth()
-    store.cookies = shallow_copy(jar)
+    store.cookies = Cookie.sanitize(jar)
     store.cookies.wr_vid = vid
     store.cookies.wr_skey = token
     store.cookies.wr_ql = "0"
     store.cookies.wr_ticket = nil
     store.cookies.wr_wrpa = nil
+    -- refreshToken → wr_rt：/web/login/renewal 靠它换回 wr_skey。
+    -- 此前这里把它丢了 → web 会话一过期就只能重扫二维码（风控风险）。
+    if type(refresh_token) == "string" and refresh_token ~= "" then
+        store.cookies.wr_rt = WeRead.urlencode(refresh_token)
+    end
     store.api_key = api_key
     store.account = {
         name = type(user_data.name) == "string" and user_data.name or "",
@@ -318,6 +325,103 @@ function Auth._complete(vid, token, jar)
     }
     Api.save_auth(store)
     return store.account
+end
+
+------------------------------------------------------------------ 会话续期（免扫码）
+
+Auth.RENEW_COOLDOWN_S = 600       -- 插件同款冷却：被动续期，不打成心跳
+-- 可用 skey 的门槛必须与 Cookie.has_login_cookie 一致，否则健康的续期会被判死。
+-- 插件用 16，但真机实测（2026-11-19 K4）登录态与 /web/login/renewal 轮换回来的
+-- wr_skey 都是 8 字符——照搬 16 会让每次成功续期都误报 expired。
+Auth.RENEW_MIN_SKEY_LEN = 8
+
+-- 纯分类器：把一次 renewal 响应折成四态，任何「删凭据」的决定都不在这里发生。
+-- 插件 client.lua:692-710 的语义：只有真 expired 才允许要求重扫，network/stale
+-- 必须原样保留当前凭据。
+function Auth.classify_renewal(r)
+    if not r.reached then
+        return "network"                       -- 超时/DNS/reset：凭据状态未知
+    end
+    local skey = r.new_skey
+    local skey_usable = type(skey) == "string" and #skey >= Auth.RENEW_MIN_SKEY_LEN
+    if r.http_status and (r.http_status == 401 or r.http_status == 403) then
+        return "expired"                       -- 服务端直接拒绝凭据
+    end
+    if r.succ then
+        -- succ=1 但没拿到可用 skey：这是"续期成功"的假象，会话其实已经死了。
+        return skey_usable and "replaced" or "expired"
+    end
+    if skey_usable then
+        return "stale"                         -- 有可用替换 key：收下，退避，别重扫
+    end
+    return "expired"
+end
+
+local last_renew_attempt = 0
+
+-- 用 wr_rt 换新的 wr_skey。返回 status（见 classify_renewal）+ 错误串。
+-- 落盘纪律：先判成功，再改副本，最后原子替换——失败响应一律不触盘。
+function Auth.renew(force)
+    local now = os.time()
+    if not force and now - last_renew_attempt < Auth.RENEW_COOLDOWN_S then
+        return "cooling"
+    end
+    last_renew_attempt = now
+
+    local auth = Api.load_auth()
+    local jar = Cookie.sanitize(auth.cookies)
+    if type(jar.wr_rt) ~= "string" or jar.wr_rt == "" then
+        return "no-refresh"                    -- 老 auth.json 没存 refreshToken
+    end
+
+    local body, status, resp_headers = wr.http_req({
+        url = "https://weread.qq.com/web/login/renewal",
+        method = "POST",
+        headers = {
+            ["User-Agent"] = WeRead.USER_AGENT,
+            ["Accept"] = "application/json, text/plain, */*",
+            ["Content-Type"] = "application/json;charset=UTF-8",
+            ["Origin"] = "https://weread.qq.com",
+            ["Referer"] = "https://weread.qq.com/",
+            ["Cookie"] = Cookie.to_header(jar),
+        },
+        body = Json.encode({ rq = "%2Fweb%2Fbook%2Fread", ql = false }),
+        timeout = 20,
+    })
+
+    local reached = body ~= nil
+    local data = nil
+    if reached and body ~= "" then
+        data = Json.decode(body)
+    end
+    local sc = resp_headers and resp_headers["set-cookie"]
+    local fresh = {}
+    if sc and sc ~= "" then
+        for line in sc:gmatch("[^\n]+") do
+            fresh = Cookie.merge_set_cookie(fresh, line)
+        end
+    end
+
+    local result = Auth.classify_renewal({
+        reached = reached,
+        http_status = status,
+        succ = data ~= nil and WeRead.is_success_response(data) or false,
+        new_skey = fresh.wr_skey,
+    })
+
+    if result == "replaced" or result == "stale" then
+        -- 只增量收紧：新 key 覆盖同名项，其余保留；sanitize 兜住条目名。
+        for name, value in pairs(fresh) do
+            if Cookie.is_session_name(name) then
+                jar[name] = value
+            end
+        end
+        auth.cookies = Cookie.sanitize(jar)
+        Api.save_auth(auth)
+    end
+    -- network / expired：什么都没改，磁盘上的凭据原样保留。
+    return result, reached and (data and tostring(data.errCode or data.errMsg) or "no-json")
+        or tostring(status)
 end
 
 return Auth

@@ -28,7 +28,10 @@ function Api.load_auth()
     if type(auth) ~= "table" then
         return { cookies = {}, api_key = "", account = {} }
     end
-    auth.cookies = auth.cookies or {}
+    -- 边界处一次性清洗（插件 credential_store 加载期复校同款纪律）：条目名必须
+    -- 是合法会话名、值不含 ';' 与控制字符。脏条目留在 jar 里会一路跟着 Cookie 头
+    -- 出站，且让「谁写坏了会话」无从判断。
+    auth.cookies = Cookie.sanitize(auth.cookies or {})
     auth.account = auth.account or {}
     return auth
 end
@@ -92,9 +95,18 @@ function Api.request(opts)
         return nil, status, nil          -- status 位置承载错误串
     end
 
-    auth.cookies = merge_cookies(auth.cookies, resp_headers)
-    if not opts.no_save then
-        Api.save_auth(auth)
+    -- 响应 cookie 不再无条件改写 jar。服务端一次匿名/超时响应会下发 `wr_skey=`
+    -- （空值），按标准语义即删除——真机实测这条路把登录态清光，只剩重扫二维码
+    -- （扫码有风控风险）。规则：已有会话的机器上，只接受「合并后仍是可用会话」
+    -- 的 2xx 响应；合法轮换（新 wr_skey）照样生效，登录中途尚无会话则不受此限。
+    local merged = merge_cookies(auth.cookies, resp_headers)
+    local jar_usable = Cookie.has_login_cookie(merged)
+        or not Cookie.has_login_cookie(auth.cookies)
+    if status and status >= 200 and status < 300 and jar_usable then
+        auth.cookies = merged
+        if not opts.no_save then
+            Api.save_auth(auth)
+        end
     end
 
     if opts.raw then

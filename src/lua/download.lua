@@ -59,28 +59,25 @@ end
 
 function Download.fetch_psvts(book_id)
     local auth = Api.load_auth()
-    local html, status, resp_headers = wr.http_req({
+    local html, status = wr.http_req({
         url = WeRead.reader_url(book_id),
         headers = {
+            -- UA 必须与正文 POST 同源：此前这里不带 UA，落到 net.c 的默认值
+            -- "WereadK4/0.1"，于是同一会话在服务端呈现两种客户端身份——插件
+            -- migrations.lua:11 明确把这种不一致列为风控触发面。
+            ["User-Agent"] = WeRead.USER_AGENT,
             ["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             ["Referer"] = Api.BASE_URL .. "/",
-            ["Cookie"] = (function()
-                local Cookie = require("cookie")
-                return Cookie.to_header(auth.cookies or {})
-            end)(),
+            ["Cookie"] = Cookie.to_header(auth.cookies or {}),
         },
         timeout = 20,
     })
     if not html then
         return nil, status
     end
-    if resp_headers and resp_headers["set-cookie"] then
-        local Cookie = require("cookie")
-        for line in resp_headers["set-cookie"]:gmatch("[^\n]+") do
-            auth.cookies = Cookie.merge_set_cookie(auth.cookies, line)
-        end
-        Api.save_auth(auth)
-    end
+    -- 此处**不**再合并响应 cookie / 落盘：reader 页是只读派生请求，却曾用一次
+    -- 匿名响应清空整个登录 jar。会话 cookie 的写入权归 Api.request 的门禁与
+    -- Auth.renew 两处，别的地方一律只读。
     -- ReaderState.extract 的 psvts 字段（window.__INITIAL_STATE__ 内嵌 JSON 或裸正则兜底）
     local psvts = html:match([["psvts"%s*:%s*"([^"]+)"]])
     return psvts, status
@@ -91,7 +88,6 @@ end
 -- 单章纯文本（t_0 + 可选 t_1 shard 解码合并）。失败返回 nil, err。
 function Download.fetch_chapter_text(book_id, chapter_uid, psvts)
     local params = WeRead.make_content_params(book_id, chapter_uid, psvts, { sc = 1 })
-    local Cookie = require("cookie")
     local auth = Api.load_auth()
 
     local function fetch_shard(endpoint)
@@ -112,24 +108,46 @@ function Download.fetch_chapter_text(book_id, chapter_uid, psvts)
         return body, status
     end
 
-    local t0, st0 = fetch_shard("/web/book/chapter/t_0")
-    if not t0 then
-        return nil, "t_0 failed: " .. tostring(st0)
+    -- 抓一次 t_0。**空分片不当成功**：真机实测服务端对失效会话就是回 200 + 0 字节，
+    -- 若按原样返回 ""，整本书会静默降级成只有标题（dk3_smoke 曾因此假绿）。
+    local function grab()
+        local t0, st0 = fetch_shard("/web/book/chapter/t_0")
+        if not t0 then
+            return nil, "t_0 failed: " .. tostring(st0)
+        end
+        if t0 == "{}" then
+            return nil, "t_0 empty（可能未购/不可试读）"
+        end
+        if t0:sub(1, 1) == "{" and t0:find('"bookId"', 1, true) then
+            -- JSON 错误体（未购/试读结束等）
+            local j = Json.decode(t0)
+            return nil, "t_0 json: errCode=" .. tostring(j and j.errCode)
+        end
+        if t0 == "" then
+            return nil, "EMPTY-SHARD"
+        end
+        local ok, decoded = pcall(Shard.decode, t0)
+        if not ok then
+            return nil, "shard decode: " .. tostring(decoded)
+        end
+        if decoded == "" then
+            return nil, "EMPTY-SHARD"
+        end
+        return decoded
     end
-    if t0 == "{}" then
-        return nil, "t_0 empty（可能未购/不可试读）"
+
+    local text, err = grab()
+    if err == "EMPTY-SHARD" then
+        -- 先免扫码续一次会话再重试；续期失败才把问题报出去。
+        local Auth = require("auth")
+        local renew_status = Auth.renew()
+        text, err = grab()
+        if not text then
+            return nil, "正文为空（会话续期: " .. tostring(renew_status) .. "）"
+        end
+    elseif not text then
+        return nil, err
     end
-    local text
-    if t0:sub(1, 1) == "{" and t0:find('"bookId"', 1, true) then
-        -- JSON 错误体（未购/试读结束等）
-        local j = Json.decode(t0)
-        return nil, "t_0 json: errCode=" .. tostring(j and j.errCode)
-    end
-    local ok, decoded = pcall(Shard.decode, t0)
-    if not ok then
-        return nil, "shard decode: " .. tostring(decoded)
-    end
-    text = decoded
 
     local ok1, t1 = pcall(fetch_shard, "/web/book/chapter/t_1")
     if ok1 and t1 and t1 ~= "{}" and #t1 > 32 then
