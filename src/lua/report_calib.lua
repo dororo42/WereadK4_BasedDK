@@ -15,15 +15,29 @@
 --      多数行不自洽 = 服务端各存各的（pr 不是 co 的函数）→ 后果：我方算的 pr 会被原样记住，
 --      所以换算不可信时必须拒发，而不是「发出去再看」。
 --
+--   Q3 拒发线的命中面：Report.MIN_AVG_WORDS 在真书架上挡掉多少本（被挡住=永远不会同步进度，
+--      是产品洞），以及「改用章序百分比」兜底能不能替上（不依赖 wordCount，精度只到 1/#chapters）。
+--
+-- 实测（2026-11-19 真机书架，150s 预算内采到 sampled=151 / skipped=0）：
+--   Q1：co>本章 wordCount 86/151 → 服务端不校验 co，原样存。
+--   Q2：可判定的 37 个点里只有 2 个能由 co 按字数推出 → 服务端不由 co 反推 pr，co 与 pr 各存各的。
+--   Q3：GATED=8/151（5.3%），且这 8 本全是 words=1..4 的占位字数目录；章序百分比只补得上 1 本，
+--       另外 7 本与服务端 pr 相差 >5 点。
+--   → 决定：不给 position_of 加「章序百分比」兜底。兜底把「不同步」换成「按错误位置同步」，
+--     而 Q2 已经证明 pr 是被服务端原样记住的字段——写偏一位就是用户的进度被写坏。
+--     保持拒发。这三个问题已答完，再跑本脚本是复核，不是取证。
+--
 -- 用法：. tools/k4-env.local.sh && ssh -p "$K4_PORT" "$K4_HOST"
 --       'cd /mnt/us/weread && ./weread-dyn lua/report_calib.lua'
 -- 弱网下一本书两次请求（getprogress + 目录），书架上百本，所以有 DEADLINE_S 硬预算：
 -- 到点就停并说明「本次只采到这些」，绝不把样本当全量。
+-- 只读取证：全程 GET，不做任何 POST；跑完用 auth.json 指纹复核过 jar 逐字节没变。
 
 package.path = "/mnt/us/weread/lua/lib/?.lua;/mnt/us/weread/lua/?.lua;" .. package.path
 
 local Api = require("api")
 local Download = require("download")
+local Report = require("report")     -- 只为复用拒发线 MIN_AVG_WORDS，判据不留两份
 
 local DEADLINE_S = 150          -- 网络预算；超出就停止采样（结论标注样本量）
 local Q2_SLACK = 2              -- 目录 wordCount 与真实正文字数的系统性误差（字数/字元、排版）
@@ -41,8 +55,10 @@ local t0 = os.time()
 local sampled, skipped = 0, 0
 local co_over, co_within = 0, 0            -- Q1
 local q2_in, q2_out, q2_na = 0, 0, 0       -- Q2
+local gated, gate_ok = 0, 0                -- Q3：本仓拒发线在真书架上命中多少本
+local fb_close, fb_far = 0, 0              -- Q3：被拒的本用「章序百分比」能不能替上
 
-print("id ci co words total pr band(co per pr) q2")
+print("字段: id ci co words total pr [pr反解出的章内偏移区间] Q2判定 avg=每章平均字数 Q3拒发判定 idx%=章序百分比")
 for _, b in ipairs(books) do
     if os.time() - t0 >= DEADLINE_S then
         print(string.format("-- deadline %ds reached, sampling stopped", DEADLINE_S))
@@ -94,8 +110,26 @@ for _, b in ipairs(books) do
                 else
                     q2_na = q2_na + 1
                 end
-                print(string.format("%s ci=%d co=%d words=%d total=%d pr=%d [%.0f,%.0f] %s",
-                    tostring(id), idx, co, words, total, pr, band_lo, band_hi, verdict))
+                -- Q3：拒发线（report.MIN_AVG_WORDS）的命中面。命中即本仓永远不会给这本
+                -- 书上报进度——那是产品上的洞，所以顺手量「改用章序百分比」能不能替上：
+                -- 章序百分比不依赖 wordCount，对占位字数目录免疫，但精度只到 1/#chapters。
+                local avg = total / #chapters
+                local idx_pct = math.floor((pos - 1) / #chapters * 100 + 0.5)
+                local gate = "ok"
+                if avg < Report.MIN_AVG_WORDS then
+                    gated = gated + 1
+                    gate = "GATED"
+                    if math.abs(idx_pct - pr) <= 5 then
+                        fb_close = fb_close + 1
+                    else
+                        fb_far = fb_far + 1
+                    end
+                else
+                    gate_ok = gate_ok + 1
+                end
+                print(string.format("%s ci=%d co=%d words=%d total=%d pr=%d [%.0f,%.0f] %s avg=%.1f %s idx%%=%d",
+                    tostring(id), idx, co, words, total, pr, band_lo, band_hi, verdict,
+                    avg, gate, idx_pct))
             else
                 skipped = skipped + 1
             end
@@ -104,8 +138,8 @@ for _, b in ipairs(books) do
 end
 
 print(string.format(
-    "calib: sampled=%d skipped=%d  Q1 co>wordCount=%d co<=words=%d  Q2 IN=%d OUT=%d NA=%d",
-    sampled, skipped, co_over, co_within, q2_in, q2_out, q2_na))
+    "calib: sampled=%d skipped=%d  Q1 co>wordCount=%d co<=words=%d  Q2 IN=%d OUT=%d NA=%d  Q3 GATED=%d ok=%d (章序%% 可替=%d 差太远=%d)",
+    sampled, skipped, co_over, co_within, q2_in, q2_out, q2_na, gated, gate_ok, fb_close, fb_far))
 if sampled == 0 then
     print("calib: 无可采样书籍（书架无服务端进度或目录失败）")
     os.exit(1)
@@ -130,5 +164,14 @@ else
     print(string.format(
         "calib: %d/%d 个可判定点自洽 → 服务端可能在由 co 推导 pr，"
         .. "此时 co 的单位是硬约束，position_of 必须与之一致", q2_in, decidable))
+end
+if gated == 0 then
+    print("calib: Q3 拒发线在本样本上零命中 → 采样到的目录字数都够换算")
+else
+    print(string.format(
+        "calib: Q3 有 %d/%d 本被拒发线挡住（这些书永远不会与服务端同步进度）。"
+        .. "若改用「章序百分比」兜底（不依赖 wordCount），可把其中 %d 本补进服务端 ±5 点内，%d 本仍差太远"
+        .. " → 要不要加这条兜底，看这两个数，别凭感觉。",
+        gated, sampled, fb_close, fb_far))
 end
 os.exit(0)
