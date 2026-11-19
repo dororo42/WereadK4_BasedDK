@@ -10,8 +10,8 @@
 
 ## Current Handoff
 
-- Latest: `handoffs/2026-11-19-080656-dk2-login-shelf-ok/HANDOFF.md`
-- Branch: main @ fbd8cbc
+- Latest: `handoffs/2026-11-19-085900-dk2-download-reader-code-ready/HANDOFF.md`
+- Branch: main @ 09a3a57
 - Status: [TODO: 进行中 / 等待决策 / …]
 
 任何 agent 开始工作前，先读上面的 HANDOFF.md。这份指针由 orbital_handoff 维护，手工交接时请同步更新。
