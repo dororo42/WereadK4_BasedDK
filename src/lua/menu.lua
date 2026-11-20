@@ -13,6 +13,7 @@ local Auth = require("auth")
 local Shelf = require("shelf")
 local Download = require("download")
 local Reader = require("reader")
+local Config = require("config")
 local Report = require("report")
 local Progress = require("progress")
 local WeRead = require("protocol")
@@ -180,6 +181,45 @@ local function pick_chapter(chapters, cur_idx)
     end
 end
 
+-- 快捷菜单（Menu / ScreenKB+Down，docs/keymap-k4.md §二语义）：阅读态三选一。
+-- 返回 "resume" | "toc" | "exit"。Back/Home = 继续阅读（取消）。
+local function quick_menu(ch_title)
+    local items = { "继续阅读", "章节目录", "退出阅读" }
+    local sel = 1
+    local function draw_qm()
+        wr.fb_fill(0, 0, W, H, 0x00)
+        text(16, 14, clip(ch_title, 18), 0xFF, ft_main)
+        wr.fb_fill(16, 14 + TITLE_H, W - 32, 2, 0xFF)
+        for i, name in ipairs(items) do
+            local y = Y0 + (i - 1) * ITEM_H
+            if i == sel then
+                wr.fb_fill(12, y - 6, W - 24, ITEM_H - 6, 0xFF)
+                text(22, y, name, 0x00, ft_main)
+            else
+                text(22, y, name, 0xFF, ft_main)
+            end
+        end
+        if ft_small then
+            wr.fb_text_ft(ft_small, 16, H - 40, "上下移动 中键选择 返回继续阅读", 0x60)
+        end
+        wr.fb_quant()
+        wr.fb_refresh(0)
+    end
+    draw_qm()
+    while true do
+        local key = wr.input_poll(1000, true)
+        if key == "Up" then
+            sel = sel - 1; if sel < 1 then sel = #items end; draw_qm()
+        elseif key == "Down" then
+            sel = sel + 1; if sel > #items then sel = 1 end; draw_qm()
+        elseif key == "Press" then
+            return ({ "resume", "toc", "exit" })[sel]
+        elseif key == "Back" or key == "Home" then
+            return "resume"
+        end
+    end
+end
+
 -- 阅读主循环：全项目唯一的跨章决策点（reader 只报 action，不持有目录）。
 -- 每次离开一章就 Progress.set 落盘 → Back/Home/断电都能续读；Progress 单一写者就在这里。
 local function read_book(book_id)
@@ -237,6 +277,24 @@ local function read_book(book_id)
             else
                 cur_idx = chapters[pos - 1].chapterIdx
                 page = -1                -- 负数 = 上一章末页（reader.lua 约定）
+            end
+        elseif ret.action == "quickmenu" then
+            -- 进度已在上方统一落盘；此处只做分支
+            local qm = quick_menu(ch.title)
+            if qm == "exit" then
+                return
+            elseif qm == "toc" then
+                local pick = pick_chapter(chapters, cur_idx)
+                if pick == "exit" then
+                    return
+                elseif pick then
+                    cur_idx = pick
+                    page = 1
+                else
+                    page = ret.page          -- 目录取消 → 回原页
+                end
+            else
+                page = ret.page              -- 继续阅读：回原页
             end
         elseif ret.action == "toc" then
             local pick = pick_chapter(chapters, cur_idx)
@@ -320,6 +378,49 @@ if not SMOKE then
                 else
                     show("暂无阅读记录")
                 end
+                draw()
+            elseif items[sel] == "设置" then
+                -- 字号选择（最小设置集）：20/22/26/30，落 config.json，下次阅读生效
+                local sizes = { 20, 22, 26, 30 }
+                local cur = tonumber(Config.load().font_size) or 26
+                local sel_fs, running2 = 1, true
+                for i, v in ipairs(sizes) do if v == cur then sel_fs = i end end
+                local function draw_fs()
+                    wr.fb_fill(0, 0, W, H, 0x00)
+                    text(16, 14, "设置 · 字号", 0xFF, ft_main)
+                    wr.fb_fill(16, 14 + TITLE_H, W - 32, 2, 0xFF)
+                    for i, v in ipairs(sizes) do
+                        local y = Y0 + (i - 1) * ITEM_H
+                        local label = tostring(v) .. " pt" .. (v == cur and "（当前）" or "")
+                        if i == sel_fs then
+                            wr.fb_fill(12, y - 6, W - 24, ITEM_H - 6, 0xFF)
+                            text(22, y, label, 0x00, ft_main)
+                        else
+                            text(22, y, label, 0xFF, ft_main)
+                        end
+                    end
+                    if ft_small then
+                        wr.fb_text_ft(ft_small, 16, H - 40, "上下移动 中键确认 返回", 0x60)
+                    end
+                    wr.fb_quant()
+                    wr.fb_refresh(0)
+                end
+                draw_fs()
+                while running2 do
+                    local k = wr.input_poll(1000, true)
+                    if k == "Up" then
+                        sel_fs = sel_fs - 1; if sel_fs < 1 then sel_fs = #sizes end; draw_fs()
+                    elseif k == "Down" then
+                        sel_fs = sel_fs + 1; if sel_fs > #sizes then sel_fs = 1 end; draw_fs()
+                    elseif k == "Press" then
+                        Config.set("font_size", sizes[sel_fs])
+                        show("字号已设置: " .. sizes[sel_fs] .. " pt（下次阅读生效）", true)
+                        running2 = false
+                    elseif k == "Back" or k == "Menu" or k == "Home" then
+                        running2 = false
+                    end
+                end
+                sel = 1
                 draw()
             else
                 show("已选择: " .. items[sel])

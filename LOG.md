@@ -1,5 +1,38 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-20 · 代码核实批次：快捷菜单 UI + 设置落地 + spool 契约修正（设备离线，全主机验证）
+
+**目标**：用户离开前核实代码并继续项目（设备无关部分）。
+
+### 核实结论
+
+- download.lua 重写后全貌 ✓（fetch_psvts 三值返回/pclts/token 链已由后续会话修好——此前误判撤销）。
+- **发现两处行为问题**：
+  1. Menu 键在阅读态落入 else=exit 分支（quickmenu action 无人处理）→ 按 Menu=静默退出书；
+  2. epub 书阅读页标题双显（spool 头 title + xhtml 自带 h2 各一次）。
+- 快捷菜单设计差异说明：DK-3 会话曾采用"三键共用目录屏+末项退出"合并设计；用户实证期望
+  独立快捷菜单（keymap 文档 §二语义），本批按用户语义实施（拆分保留）。
+
+### 动作
+
+1. **quick_menu 三选一屏**（menu.lua，Menu/ScreenKB+Down 触发）：继续阅读/章节目录/退出阅读，
+   Back=继续阅读；read_book 补 quickmenu 分支（resume=回原页/toc=进目录/exit=退出，进度已在
+   上方统一落盘）。
+2. **设置落地**：lib/config.lua（DEFAULTS 集中/损坏回退/原子写+sync）+ reader 字号从 config
+   读（FONT_MIN/MAX=18/40 钳制，行高等比）+ menu「设置」项字号选择（20/22/26/30）。
+   tests/config_test.lua 7 断言（缺省/回读/保留用户键/损坏回退/无 .tmp 残留）。
+3. **spool 契约变更**：save_chapter 只存正文原样（不拼标题头）——epub 双显修复；
+   download_pure_test 断言同步；**设备 spool 需再清一次**（旧缓存含标题头）。
+4. 部署状态核对教训：本机命令链的 process substitution 在 BusyBox ssh 上语法报错
+   会吞掉后续命令——设备文件状态核对要用独立简单命令。
+
+### 验证
+
+- `lua5.1 tests/run.lua` → LUA-TESTS-OK (13 suite(s))（新增 config_test/html_text_test）
+- `make weread && make weread-dyn` → 0 error；host-selftest → HOST-OK + INPUT-OK
+- **设备第四次掉线**（本轮 spool 清理命令未送达）→ 恢复后需：全量部署 + `rm -rf books/*` +
+  用户复验（白底黑字/epub 正文/快捷菜单/设置字号/退出无弹窗）
+
 ## 2026-11-20 · 二轮验收取证（退出仍重启=exitmenu 假阳性根因 + 乱码=部署缺失+跨分片解码）
 
 **用户二轮报告**：①大范围乱码；②退出仍是重启。

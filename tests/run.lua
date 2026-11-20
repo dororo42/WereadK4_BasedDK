@@ -18,6 +18,7 @@ local suites = {
     "crypto_test",
     "wrap_test",
     "html_text_test",
+    "config_test",
 }
 
 local total = 0

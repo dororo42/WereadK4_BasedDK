@@ -16,12 +16,24 @@
 -- 返回 { page=, total_pages=, action= }，action ∈ next_chapter|prev_chapter|toc|exit。
 
 local WeRead = require("protocol")
+local Config = require("config")
 
 local Reader = {}
 
 local FT_PATH = "/mnt/us/weread/fonts/wqy-microhei.ttc"
-local FONT_SIZE = 26
-local LINE_H = 40
+Reader.FONT_MIN, Reader.FONT_MAX = 18, 40       -- 字号钳制边界（设置 UI 与钳制共用）
+local LINE_H_PER_PT = 40 / 26                    -- 行高随字号等比（原 26px 行高 40）
+
+local function font_size()
+    local fs = tonumber(Config.load().font_size) or 26
+    if fs < Reader.FONT_MIN then fs = Reader.FONT_MIN end
+    if fs > Reader.FONT_MAX then fs = Reader.FONT_MAX end
+    return fs
+end
+
+local function line_h(fs)
+    return math.floor(LINE_H_PER_PT * fs + 0.5)
+end
 local MARGIN_X = 30
 local MARGIN_TOP = 24
 local MARGIN_BOTTOM = 56          -- 页脚区
@@ -107,7 +119,9 @@ end
 function Reader.open(chapter_text, chapter_title, start_page)
     assert(wr.fb_open(), "fb_open failed")
     assert(wr.input_open(), "input_open failed")
-    local ft = wr.font_load(FT_PATH, FONT_SIZE)
+    local fs = font_size()
+    local lh = line_h(fs)
+    local ft = wr.font_load(FT_PATH, fs)
     if not ft then
         wr.fb_close()
         return nil, "font load failed"
@@ -116,7 +130,7 @@ function Reader.open(chapter_text, chapter_title, start_page)
     local W, H = wr.fb_w(), wr.fb_h()
     local maxw = W - MARGIN_X * 2
     local rows = Reader.layout(ft, maxw, chapter_text)
-    local rows_per_page = math.floor((H - MARGIN_TOP - MARGIN_BOTTOM) / LINE_H)
+    local rows_per_page = math.floor((H - MARGIN_TOP - MARGIN_BOTTOM) / lh)
     local total_pages = math.max(1, math.ceil(#rows / rows_per_page))
     local page = tonumber(start_page) or 1
     if page < 1 then page = total_pages end
@@ -131,7 +145,7 @@ function Reader.open(chapter_text, chapter_title, start_page)
             if row ~= "" then
                 wr.fb_text_ft(ft, MARGIN_X, y, row, 0xFF)
             end
-            y = y + LINE_H
+            y = y + lh
         end
         -- 页脚：标题 + 进度
         if ft then

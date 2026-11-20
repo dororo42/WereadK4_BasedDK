@@ -227,12 +227,15 @@ function Download.find_chapter(chapters, chapter_idx)
     return pos and chapters[pos] or nil
 end
 
+-- spool 只存章节正文原样（epub 自带 h2 章题 / txt 无题），**不拼标题头**——
+-- 否则 epub 书阅读页标题双显（spool 头 + xhtml h2 各一次，真机用户实证）。
+-- 章节标题由 Reader.open 的 chapter_title 参数独立提供（页脚用）。
 function Download.save_chapter(book_id, chapter_idx, title, text)
     local dir = Download.SPOOL .. "/" .. tostring(book_id)
     os.execute("mkdir -p '" .. dir .. "'")   -- BusyBox mkdir；路径自控无注入面
     local f = io.open(spool_path(book_id, chapter_idx), "w")
     if not f then return nil, "open spool failed" end
-    f:write(title .. "\n\n" .. text)
+    f:write(text)
     f:close()
     return spool_path(book_id, chapter_idx)
 end
@@ -266,8 +269,7 @@ local function session_psvts(book_id, sess)
 end
 
 -- 取某章纯文本：命中 spool 直接读盘，否则下载并落盘后回读。
--- 返回值统一是「spool 内容」形态（标题 + 空行 + 正文），与 read_chapter 一致——
--- 不在此处拼标题串，避免与 save_chapter 的落盘格式分两处决策。
+-- 返回值统一是「章节正文原样」（无标题头——标题由调用方经 chapter_title 参数提供）。
 -- 返回 text | nil, err
 function Download.ensure_chapter(book_id, chapters, chapter_idx, sess)
     local cached = Download.read_chapter(book_id, chapter_idx)

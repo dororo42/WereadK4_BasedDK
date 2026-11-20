@@ -40,8 +40,8 @@ local p = Download.save_chapter("b1", 10, "第十章", "正文内容")
 check(type(p) == "string", "save_chapter returns path")
 check(p == dir .. "/b1/010.txt", "spool path format, got " .. tostring(p))
 check(Download.is_spooled("b1", 10) == true, "is_spooled after save")
-check(Download.read_chapter("b1", 10) == "第十章\n\n正文内容",
-      "read_chapter returns title + blank line + text")
+check(Download.read_chapter("b1", 10) == "正文内容",
+      "read_chapter returns chapter body as-is (no title header)")
 check(Download.read_chapter("b1", 12) == nil, "read_chapter of missing spool is nil")
 
 -- 空文件不算已缓存（失败下载的残留应当重下）
@@ -50,7 +50,7 @@ if ef then ef:close() end
 check(Download.is_spooled("b1", 11) == false, "empty spool file does not count as spooled")
 
 -- ensure_chapter：缓存命中直接返回 spool 内容，全程不触网
-check(Download.ensure_chapter("b1", chapters, 10) == "第十章\n\n正文内容",
+check(Download.ensure_chapter("b1", chapters, 10) == "正文内容",
       "ensure_chapter cache hit returns spool content")
 
 -- ensure_chapter：目录里没这一章 → 触网前就拦下并给明确错误
