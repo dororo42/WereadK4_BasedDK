@@ -156,10 +156,6 @@ function Download.fetch_chapter_text(book_id, chapter_uid, psvts)
     if not e0 then
         return nil, "e_0 failed: " .. tostring(e0st)
     end
-    if e0 == "{}" or e0 == "" then
-        return nil, "EMPTY-SHARD"
-    end
-
     if e0:sub(1, 1) == "{" and e0:find('"bookId"', 1, true) then
         -- txt 书：t_0 为主分片；空分片先免扫码续期再重试一次（真机会话失效形态）
         local text, err = grab_txt()
@@ -174,24 +170,41 @@ function Download.fetch_chapter_text(book_id, chapter_uid, psvts)
         return text, err
     end
 
-    -- epub 书：e_0 必有 + e_1/e_3 可选；跨分片拼接后**单次解码**（同 txt 路教训，
-    -- 逐片独立解码从第二片起全错位=大范围乱码）。
-    local raws = { e0 }
-    for _, ep in ipairs({ "/web/book/chapter/e_1", "/web/book/chapter/e_3" }) do
-        local okx, rawx = pcall(fetch_shard, ep)
-        if okx and rawx and rawx ~= "{}" and #rawx > 32 then
-            raws[#raws + 1] = rawx
+    -- epub 书：e_0 是可解码的 xhtml 分片（>32 字节）+ e_1/e_3 可选；
+    -- 跨分片拼接后**单次解码**（同 txt 路教训，逐片独立解码从第二片起全错位）。
+    if #e0 > 32 then
+        local raws = { e0 }
+        for _, ep in ipairs({ "/web/book/chapter/e_1", "/web/book/chapter/e_3" }) do
+            local okx, rawx = pcall(fetch_shard, ep)
+            if okx and rawx and rawx ~= "{}" and #rawx > 32 then
+                raws[#raws + 1] = rawx
+            end
         end
-    end
-    local ok, decoded = pcall(Shard.decode_shards, unpack(raws))
-    if not ok then
-        return nil, "shard decode: " .. tostring(decoded)
+        local ok, decoded = pcall(Shard.decode_shards, unpack(raws))
+        if not ok then
+            return nil, "shard decode: " .. tostring(decoded)
+        end
+
+        local text = HtmlText.to_text(decoded)
+        if text == "" then
+            -- 纯图片/封面页：剥标签后无文本
+            return "[图片页——简版暂不支持图片]"
+        end
+        return text
     end
 
-    local text = HtmlText.to_text(decoded)
-    if text == "" then
-        -- 纯图片/封面页：剥标签后无文本
-        return "[图片页——简版暂不支持图片]"
+    -- 剩余情形：e_0 = "{}"/短响应 → txt 书的正常形态（e_* 为 epub 分片端点），
+    -- 走 t_0/t_1；t_0 空说明会话失效 → 续期重试（真机实证 200+0 字节形态）。
+    local text, err = grab_txt()
+    if err == "EMPTY-SHARD" then
+        local Auth = require("auth")
+        local renew_status = Auth.renew()
+        text, err = grab_txt()
+        if not text then
+            return nil, "正文为空（会话续期: " .. tostring(renew_status) .. "）"
+        end
+    elseif not text then
+        return nil, err
     end
     return text
 end

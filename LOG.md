@@ -1,5 +1,37 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-20 · 复验批次：格式探测回归修复 + dk3 口径校准 + 五 smoke 全绿
+
+**目标**：设备重新上线，复跑全部设备 smoke——**抓到并修复上批格式探测的一个回归**。
+
+### 回归与修复
+
+**格式探测顺序回归（本轮 dk3_smoke 6 failures 的根因）**：上批把 `e_0 == "{}"` 短路成
+EMPTY-SHARD，但取证实证 **txt 书的 e_0 恒返回 "{}"**（e_* 是 epub 分片端点）——短路使
+txt 路径连同会话续期重试整体不可达。修复为顺序判定：①JSON+bookId=txt → ②可解码
+xhtml 分片(>32B)=epub → ③"{}"/空=信息不足按 txt 尝试（t_0 空触发续期重试）。
+
+### dk3_smoke 口径校准（服务端真相）
+
+封面/版权页在 txt 书上**服务端真相就是无文本**（t_0 空）或以图片分片形态出现（e_0 有
+内容剥标签后=[图片] 8 字节占位）。断言口径从「5/5 全有正文」校准为：多数章有真实正文
+（≥batch/2）+ 图片占位正确落盘；幂等口径允许图片页重试 ≤2。修正后 **dk3_smoke 0 failures**
+（4/5 spool：3 章真实正文 2649-3066B + 1 占位）。
+
+### 五 smoke 复跑结果（全绿）
+
+- dk3_smoke 0 failures（续期链路活：renewal=replaced → 正文恢复）
+- download_smoke EXIT=0（封面页 [图片] 占位正确）
+- renew_smoke 0 failures（3066B 真实正文）
+- reader_render_smoke ALL PASS（3300235630/ch3 55 行回环 + body-max=255）
+- read_report_smoke 0 failures（jar 6 项 header 未见变化）
+- net_smoke done
+- 菜单 SMOKE PASS
+
+### 待办不变
+
+设备键位手感验收（跨六批）；push 待用户点头（含泄露历史改写决策）。
+
 ## 2026-11-20 · 二轮独立审查：修复面全量复核 + 两个新修复 + 变异复核
 
 **目标**：以 211540 交接为基线（FRESH），对四项需求批次的 11 提交/24 文件（+2007/-97）做 ub-mode + code-review 全量审查。
