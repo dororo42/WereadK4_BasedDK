@@ -10,8 +10,8 @@
 
 ## Current Handoff
 
-- Latest: `handoffs/2026-11-20-081142-dk3-review-quickmenu-config/HANDOFF.md`
-- Branch: main @ 91b19e1
-- Status: [TODO: 进行中 / 等待决策 / …]
+- Latest: `handoffs/2026-11-20-211540-shelf-pagination-fonts-sync/HANDOFF.md`
+- Branch: main @ 353c56e
+- Status: 等待决策（真机按键复验 + 是否 push）；主机 19 套单测与 13 条变异已全绿
 
 任何 agent 开始工作前，先读上面的 HANDOFF.md。这份指针由 orbital_handoff 维护，手工交接时请同步更新。
