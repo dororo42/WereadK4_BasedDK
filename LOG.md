@@ -57,9 +57,19 @@ xhtml 分片(>32B)=epub → ③"{}"/空=信息不足按 txt 尝试（t_0 空触�
 - net_smoke done
 - 菜单 SMOKE PASS
 
+### v3 启动器与 push（用户批准）
+
+- **start.sh v3 落地**（3737d62，已部署+真机生命周期验证）：cvm/volumd SIGSTOP 冻结 →
+  应用 → CONT → `echo 'send 139' >/proc/keypad`×2 注入 Menu 键让解冻的 cvm 自己重绘
+  home——KOReader 默认退出同款，无树 logo、无 framework 重启。弃 v2 framework
+  stop/start（init 固有 logo_screen 屏显为用户不可接受的视觉成本）。
+- **push 完成**（用户批准"提交"）：b00672b..3737d62 推送 origin/main，工作区与远端一致。
+  push 前泄露扫描：outgoing diff 中 2 处 IP 命中均为**删除行**（泄露收敛本体），无新增泄露。
+- 泄露历史 blob 仍在公开仓历史中——filter-repo+force push 仍待用户单独决策。
+
 ### 待办不变
 
-设备键位手感验收（跨六批）；push 待用户点头（含泄露历史改写决策）。
+设备键位手感验收（跨六批）；push 已完成；泄露历史改写仍待用户单独决策。
 
 ## 2026-11-20 · 二轮独立审查：修复面全量复核 + 两个新修复 + 变异复核
 
