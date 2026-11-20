@@ -13,6 +13,7 @@ local WeRead = require("protocol")
 local Cookie = require("cookie")
 local Json = require("json")
 local Api = require("api")
+local Fonts = require("fonts")
 
 local Auth = {}
 
@@ -47,7 +48,7 @@ function Auth.draw_login_screen(url, title, hint)
     wr.fb_fill(0, 0, W, H, 0x00)
     if title and wr.font_load then
         pcall(function()
-            local ft = wr.font_load("/mnt/us/weread/fonts/wqy-microhei.ttc", 30)
+            local ft = Fonts.load(30)
             if ft then
                 local w = wr.font_width(ft, title)
                 wr.fb_text_ft(ft, math.floor((W - w) / 2), 30, title, 0xFF)
@@ -65,7 +66,7 @@ function Auth.draw_login_screen(url, title, hint)
     end
     if hint and wr.font_load then
         pcall(function()
-            local ft = wr.font_load("/mnt/us/weread/fonts/wqy-microhei.ttc", 20)
+            local ft = Fonts.load(20)
             if ft then
                 local w = wr.font_width(ft, hint)
                 wr.fb_text_ft(ft, math.floor((W - w) / 2), y0 + size + 16, hint, 0x40)
@@ -84,7 +85,7 @@ function Auth.clear_screen(msg)
     wr.fb_fill(0, 0, W, H, 0x00)
     if wr.font_load then
         pcall(function()
-            local ft = wr.font_load("/mnt/us/weread/fonts/wqy-microhei.ttc", 30)
+            local ft = Fonts.load(30)
             if ft then
                 local w = wr.font_width(ft, msg)
                 wr.fb_text_ft(ft, math.floor((W - w) / 2), math.floor(H / 2) - 20, msg, 0xFF)

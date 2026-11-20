@@ -9,7 +9,7 @@
 
 #include "fb.h"
 
-#define WR_FT_MAX_FONTS 4
+#define WR_FT_MAX_FONTS 8
 
 int  wr_ft_init(void);                                   /* 幂等 */
 void wr_ft_done(void);
