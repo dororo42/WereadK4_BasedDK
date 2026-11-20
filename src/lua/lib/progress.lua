@@ -4,7 +4,9 @@
 -- /mnt/us/weread/data/progress.json，写路径统一走 Json.write_atomic
 -- （tmp + rename，掉电/kill 打断不会留下半截文件）。
 -- 结构: { last_book_id = "<id>",
---         books = { ["<id>"] = { chapter_idx=, page=, title=, updated= } } }
+--         books = { ["<id>"] = { chapter_idx=, page=, total_pages=, title=, updated= } } }
+-- total_pages 是算本地百分比的分母：没有它，本地进度与云端进度根本没法比大小
+-- （页码本身跨书跨字号无量纲），同步判异就只能降级成"比章序"。
 -- book_id 一律 tostring 后作键：JSON 对象的键天然是字符串，避免 1234 与 "1234" 两份记录。
 
 local Json = require("json")
@@ -30,7 +32,7 @@ function Progress.load()
     return data
 end
 
--- 单本进度记录 { chapter_idx=, page=, title=, updated= } | nil（无记录）
+-- 单本进度记录 { chapter_idx=, page=, total_pages=, title=, updated= } | nil（无记录）
 function Progress.get(book_id)
     if book_id == nil then return nil end
     local rec = Progress.load().books[tostring(book_id)]
@@ -39,7 +41,7 @@ function Progress.get(book_id)
 end
 
 -- 写单本进度并把它记为最近阅读。返回 true | nil, err。
-function Progress.set(book_id, chapter_idx, page, title)
+function Progress.set(book_id, chapter_idx, page, title, total_pages)
     local data = Progress.load()
     local id = tostring(book_id)
     local rec = data.books[id]
@@ -49,6 +51,8 @@ function Progress.set(book_id, chapter_idx, page, title)
     end
     rec.chapter_idx = tonumber(chapter_idx) or rec.chapter_idx or 1
     rec.page = tonumber(page) or rec.page or 1
+    -- 可选参数：nil 时保留旧值（老记录不该被一次翻页清空分母）
+    if tonumber(total_pages) then rec.total_pages = math.floor(tonumber(total_pages)) end
     if title ~= nil then rec.title = tostring(title) end
     rec.updated = os.time()
     data.last_book_id = id

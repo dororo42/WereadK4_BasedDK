@@ -17,10 +17,10 @@
 
 local WeRead = require("protocol")
 local Config = require("config")
+local Fonts = require("fonts")
 
 local Reader = {}
 
-local FT_PATH = "/mnt/us/weread/fonts/wqy-microhei.ttc"
 Reader.FONT_MIN, Reader.FONT_MAX = 18, 40       -- 字号钳制边界（设置 UI 与钳制共用）
 
 local function font_size()
@@ -116,13 +116,15 @@ function Reader.layout(ft, maxw, text)
     return rows
 end
 
--- start_page: 起始页（1 起）；传负数表示「从末页开始」——上一章回退时用。
+-- start_page: 起始页（1 起）；传负数表示「从末页开始」——上一章回退时用；
+-- 传 { fraction = 0..1 } 表示按比例定位——云端进度跳转时用（总页数只有本模块
+-- 排版后才算得出，调用方给不了页码，只给得了比例；两解都传时以 fraction 为准）。
 function Reader.open(chapter_text, chapter_title, start_page)
     assert(wr.fb_open(), "fb_open failed")
     assert(wr.input_open(), "input_open failed")
     local fs = font_size()
     local lh = line_h(fs)
-    local ft = wr.font_load(FT_PATH, fs)
+    local ft = Fonts.load(fs)
     if not ft then
         wr.fb_close()
         return nil, "font load failed"
@@ -133,9 +135,15 @@ function Reader.open(chapter_text, chapter_title, start_page)
     local rows = Reader.layout(ft, maxw, chapter_text)
     local rows_per_page = math.floor((H - MARGIN_TOP - MARGIN_BOTTOM) / lh)
     local total_pages = math.max(1, math.ceil(#rows / rows_per_page))
-    local page = tonumber(start_page) or 1
-    if page < 1 then page = total_pages end
-    page = math.min(page, total_pages)
+    local page
+    if type(start_page) == "table" then
+        local f = math.min(math.max(tonumber(start_page.fraction) or 0, 0), 1)
+        page = math.min(math.floor(f * total_pages) + 1, total_pages)
+    else
+        page = tonumber(start_page) or 1
+        if page < 1 then page = total_pages end
+        page = math.min(page, total_pages)
+    end
 
     local function draw()
         wr.fb_fill(0, 0, W, H, 0x00)

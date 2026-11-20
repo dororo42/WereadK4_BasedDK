@@ -19,8 +19,12 @@ local suites = {
     "wrap_test",
     "html_text_test",
     "config_test",
+    "fonts_test",
+    "download_batch_test",
+    "sync_test",
     "shelf_ui_test",
     "reader_layout_test",
+    "menu_ui_test",
 }
 
 local total = 0

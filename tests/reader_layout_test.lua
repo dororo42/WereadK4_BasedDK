@@ -107,6 +107,27 @@ check(ret.page == pages_loose and ret.action == "next_chapter",
     "宽松档连翻 6 次应停在末页(" .. pages_loose .. ")并给出 next_chapter，实得 page="
         .. tostring(ret.page) .. " action=" .. tostring(ret.action))
 
+-- 6) 按比例定位（云端进度跳转的入口）：标准档 5 页，fraction 决定落在哪一页。
+--    这一条是"调用方算不出页码"的唯一出口——reader 不把总页数漏出去，
+--    所以跳转必须能吃比例；能吃比例就必须证明它和整数页码、负数末页约定互不干扰。
+Config.set("font_size", 26)
+Config.set("line_factor", 1.54)
+local function open_at(start)
+    drawn, keys = {}, { "Back" }
+    local r = Reader.open(TEXT, "标题", start)
+    return r.page, r.total_pages
+end
+local p_half, tot = open_at({ fraction = 0.5 })
+check(tot == pages_std, "fraction 用例的分母应仍是标准档 5 页，实得 " .. tostring(tot))
+check(p_half == 3, "fraction 0.5 应落第 3 页，实得 " .. p_half)
+check(open_at({ fraction = 0 }) == 1, "fraction 0 应落首页")
+check(open_at({ fraction = 0.99 }) == 5, "fraction 0.99 应落末页")
+check(open_at({ fraction = 5 }) == 5, "fraction 越界必须夹到末页而非溢出页码")
+check(open_at({ fraction = -1 }) == 1, "fraction 负值必须夹到首页")
+check(open_at({}) == 1, "空表（无 fraction）视为首页，不该当成负数末页")
+check(open_at(4) == 4, "整数页码约定不受影响")
+check(open_at(-1) == tot, "负数仍是「从末页开始」约定")
+
 Config.PATH = path_saved
 os.remove(TMP)
 _G.wr = nil

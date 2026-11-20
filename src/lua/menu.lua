@@ -15,10 +15,11 @@ local Download = require("download")
 local Reader = require("reader")
 local Config = require("config")
 local Report = require("report")
+local Sync = require("sync")
 local Progress = require("progress")
 local WeRead = require("protocol")
+local Fonts = require("fonts")
 
-local FONT_PATH = os.getenv("WR_FONT") or "/mnt/us/weread/fonts/wqy-microhei.ttc"
 
 -- 菜单项随登录态变化（shelf/阅读在登录后可用）
 local function build_items()
@@ -44,8 +45,8 @@ if not SMOKE then assert(ok_in, "input_open failed (KOReader 独占中?)") end
 local W, H = wr.fb_w(), wr.fb_h()
 
 -- freetype 字体：主字号 30 + 小字号 20；加载失败回退点阵
-local ft_main = wr.font_load(FONT_PATH, 30)
-local ft_small = ft_main and wr.font_load(FONT_PATH, 20) or nil
+local ft_main = Fonts.load(30)
+local ft_small = ft_main and Fonts.load(20) or nil
 local FT_MODE = (ft_main ~= nil)
 
 local ITEM_H   = FT_MODE and 46 or (16 * 2)      -- 行高
@@ -181,11 +182,11 @@ local function pick_chapter(chapters, cur_idx)
     end
 end
 
--- 快捷菜单（Menu / ScreenKB+Down，docs/keymap-k4.md §二语义）：阅读态四选一
--- （继续阅读/章节目录/下载后面5章/退出阅读）。返回所选项名字符串。
+-- 快捷菜单（Menu / ScreenKB+Down，docs/keymap-k4.md §二语义）：阅读态五选一
+-- （继续阅读/章节目录/下载全本/下载后面5章/退出阅读）。返回所选项名字符串。
 -- Back/Home = 继续阅读（取消）。items 可选覆盖（默认四项）。
 local function quick_menu(ch_title, items)
-    items = items or { "继续阅读", "章节目录", "下载后面 5 章", "退出阅读" }
+    items = items or { "继续阅读", "章节目录", "下载全本", "下载后面 5 章", "退出阅读" }
     local sel = 1
     local function draw_qm()
         wr.fb_fill(0, 0, W, H, 0x00)
@@ -221,9 +222,83 @@ local function quick_menu(ch_title, items)
     end
 end
 
+-- 批量下载屏：全本与"后面 5 章"共用一套循环、取消、汇总（唯一差别是章数上限）。
+-- count 传 math.huge 即全本；from_pos 是目录数组下标（不是服务端 chapterIdx）。
+-- 已 spool 的章由 Download.book 跳过 → 中途取消后重跑就是续传（幂等）。
+local function download_batch(book_id, count, from_pos)
+    local last_shown = 0
+    local dl, dlerr, stats = Download.book(book_id, count, from_pos,
+        function(done, total, t)
+            -- 取消：单进程无异步，网络往返之间是唯一的按键时机；input_poll(0) 不等待。
+            local k = wr.input_poll(0, true)
+            if k == "Back" or k == "Home" then return false end
+            local now = wr.millis()
+            -- e-ink 全刷限流（插件 download_dialog 同口径 3s）：151 章逐章闪屏既慢又糊，
+            -- 计数每章都算，重绘只在首章、每 3 秒、末章时发。
+            if last_shown == 0 or now - last_shown >= 3000 or done == total then
+                last_shown = now
+                Auth.clear_screen(string.format("下载 %d/%d: %s",
+                    done, total, clip(tostring(t or ""), 18)))
+            end
+        end)
+    local msg
+    if not dl then
+        msg = "下载失败: " .. clip(tostring(dlerr), 40)
+    else
+        msg = string.format("%s: 成功 %d 失败 %d / 共 %d 章",
+            stats.cancelled and "已取消" or "下载完成", stats.ok, stats.fail, stats.total)
+    end
+    Auth.clear_screen(msg)
+    local t0 = wr.millis()
+    while wr.millis() - t0 < 1500 do end
+end
+
+-- 打开书本时的云端对位（用户口径：与微信读书端保持一致）。
+-- 设置「云端进度」=关 时整段跳过；force=true（菜单「同步进度」入口）忽略设置强制拉一次。
+-- 返回新的 cur_idx 与 page（page 可能是 {fraction=}）；不动就把原值原样退回。
+-- 判异与取舍在 sync.lua（纯函数），这里只做取数与跳转——两侧都不读屏。
+local function cloud_position(book_id, chapters, cur_idx, page, force)
+    if not force and Config.load().progress_sync == false then
+        return cur_idx, page
+    end
+    local remote, rerr = Sync.remote(book_id)
+    if not remote then
+        -- 静默：自动路径上没网/接口改版不该拦住打开书；手动入口由调用方另屏提示
+        if force then show("云端进度不可用: " .. clip(tostring(rerr), 30), true) end
+        return cur_idx, page
+    end
+    local tgt, terr = Sync.target(remote, chapters)
+    if not tgt then
+        if force then show("云端位置对不上本书目录: " .. clip(tostring(terr), 24), true) end
+        return cur_idx, page
+    end
+    -- 本地百分比要 total_pages 才算得出（老记录没有 → 退化成比章序）
+    local rec = Progress.get(book_id)
+    local local_pct, local_pos = nil, Download.chapter_pos(chapters, cur_idx)
+    if not rec then
+        local_pos = nil                      -- 本地从没记过：不是"两边不一致"，是第一次读
+    elseif rec.total_pages then
+        local lp = Report.position_of(chapters, rec.chapter_idx, rec.page, rec.total_pages)
+        if lp then local_pct = lp.percent end
+    end
+    local side, why = Sync.choose(remote, tgt, local_pct, local_pos)
+    if side ~= "remote" then
+        if force then
+            show(string.format("无需跳转：%s（云端 第%d章 / 本地 第%d章）",
+                why, tgt.chapter_idx, cur_idx), true)
+        end
+        return cur_idx, page
+    end
+    Auth.clear_screen(string.format("已同步到云端位置: 第%d章 %s（%s）",
+        tgt.chapter_idx, clip(tgt.title or "", 10), why))
+    local t0 = wr.millis()
+    while wr.millis() - t0 < 1500 do end
+    return tgt.chapter_idx, { fraction = tgt.fraction }
+end
+
 -- 阅读主循环：全项目唯一的跨章决策点（reader 只报 action，不持有目录）。
 -- 每次离开一章就 Progress.set 落盘 → Back/Home/断电都能续读；Progress 单一写者就在这里。
-local function read_book(book_id)
+local function read_book(book_id, force_sync)
     local chapters, cerr = Download.fetch_catalog(book_id)
     if not chapters or #chapters == 0 then
         show("目录加载失败: " .. tostring(cerr):sub(1, 40), true)
@@ -236,6 +311,7 @@ local function read_book(book_id)
         cur_idx = chapters[1].chapterIdx   -- 进度指向的章已不在目录（下架/改版）→ 从头读
     end
     local page = (rec and rec.page) or 1
+    cur_idx, page = cloud_position(book_id, chapters, cur_idx, page, force_sync)
     local sess = Download.new_session()    -- psvts 每本书只抽一次
 
     while true do
@@ -249,12 +325,14 @@ local function read_book(book_id)
         end
 
         local t_open = os.time()
+        -- page 要么是整数页码（1 起，负数=末页），要么是 {fraction=0..1}
+        -- （云端跳转：页数只有 reader 自己算得出，调用方只能给比例）
         local ret = Reader.open(body, ch.title, page)
         if not ret then
             show("阅读器打开失败", true)
             return
         end
-        Progress.set(book_id, cur_idx, ret.page, ch.title)
+        Progress.set(book_id, cur_idx, ret.page, ch.title, ret.total_pages)
         -- 服务端同步（DK-3.5）：位置随阅读时长一起上报，一章一次。失败不打扰阅读——
         -- 本地进度已落盘，丢的只是一次服务器同步，下次离开该章还会再报。
         Report.send({
@@ -294,32 +372,17 @@ local function read_book(book_id)
                 else
                     page = ret.page          -- 目录取消 → 回原页
                 end
-            elseif qm == "下载后面 5 章" then
-                -- 批量预取 pos+1 起 5 章（进度屏；已 spool 的跳过 → 幂等）
-                if pos >= #chapters then
-                    Auth.clear_screen("已是最后一章，后面没有可下载的章节")
+            elseif qm == "下载全本" or qm == "下载后面 5 章" then
+                -- 全本 = 从第 1 章起全部（已 spool 的跳过）；后 5 章 = 当前章之后 5 章
+                local count, from = 5, pos + 1
+                if qm == "下载全本" then count, from = math.huge, 1 end
+                if from > #chapters then
+                    Auth.clear_screen(qm == "下载全本" and "本书没有可下载的章节"
+                        or "已是最后一章，后面没有可下载的章节")
                     local t0 = wr.millis()
                     while wr.millis() - t0 < 1200 do end
                 else
-                    local dl, dlerr = Download.book(book_id, 5, pos + 1, function(i, total, t)
-                        Auth.clear_screen(string.format("下载 %d/%d: %s",
-                            i, total, clip(tostring(t or ""), 18)))
-                    end)
-                    -- 成功/失败只能数 Download.book 返回的那份目录：_err 写在它自己的条目上，
-                    -- 本函数的 chapters 是另一次 fetch_catalog 的结果，永远没有 _err。
-                    local okn, failn = 0, 0
-                    if dl then
-                        for i = pos + 1, math.min(pos + 5, #dl) do
-                            if dl[i] then
-                                if dl[i]._err then failn = failn + 1 else okn = okn + 1 end
-                            end
-                        end
-                    end
-                    Auth.clear_screen(dlerr
-                        and ("下载失败: " .. clip(tostring(dlerr), 40))
-                        or string.format("下载完成: 成功 %d 失败 %d", okn, failn))
-                    local t0 = wr.millis()
-                    while wr.millis() - t0 < 1200 do end
+                    download_batch(book_id, count, from)
                 end
                 page = ret.page
             else
@@ -408,14 +471,53 @@ if not SMOKE then
                     show("暂无阅读记录")
                 end
                 draw()
+            elseif items[sel] == "同步进度" then
+                -- 手动入口：对最近一本书强制拉一次云端位置并接着读（忽略设置里的开关）。
+                -- 上报方向不需要手动：每离开一章 Report.send 已经发过一次。
+                local last = Progress.get_last()
+                if last then
+                    assert(wr.fb_open(), "fb_open failed")
+                    read_book(last, true)
+                else
+                    show("暂无阅读记录，无从同步")
+                end
+                draw()
             elseif items[sel] == "设置" then
-                -- 设置主屏：字号 / 行距（共用值选择器，落 config.json，下次阅读生效）
+                -- 设置主屏：字号 / 行距 / 云端进度 / 字体（共用值选择器，落 config.json）
+                local font_opts = {}
+                for _, c in ipairs(Fonts.list()) do
+                    font_opts[#font_opts + 1] = { label = c.label, v = c.path }
+                end
                 local entries = {
                     { key = "font_size",   name = "字号",
                       opts = { {label="20 pt",v=20},{label="22 pt",v=22},{label="26 pt",v=26},{label="30 pt",v=30} } },
                     { key = "line_factor", name = "行距",
                       opts = { {label="紧凑",v=1.3},{label="标准",v=1.54},{label="宽松",v=1.8} } },
+                    { key = "progress_sync", name = "云端进度",
+                      opts = { {label="开",v=true},{label="关",v=false} } },
+                    { key = "font_path", name = "字体", cur = Fonts.path, opts = font_opts,
+                      apply = function(o)
+                          -- 先在设备上开一次这个 face：文件在但 freetype 打不开（损坏、
+                          -- 非字体、槽位耗尽）时必须拒绝，否则坏设置要到下次翻页才暴露。
+                          local ft = Fonts.open(o.v, 30)
+                          if not ft then
+                              return "字体打不开，未改设置: " .. clip(o.label, 10)
+                          end
+                          wr.font_close(ft)
+                          Config.set("font_path", o.v)
+                          -- 菜单自身立即换面（这一屏就是最好的预览）；阅读页在下次
+                          -- Reader.open 时才取新句柄，所以正文要换章才见效。
+                          wr.font_close(ft_main)
+                          ft_main = Fonts.load(30)
+                          if ft_small then wr.font_close(ft_small) end
+                          ft_small = ft_main and Fonts.load(20) or nil
+                          return "已切换字体: " .. clip(o.label, 10)
+                      end },
                 }
+                -- 当前值一律按字符串比：字号/行距是数字，字体是路径，两套比较没必要。
+                local function current_of(e)
+                    return tostring(e.cur and e.cur() or Config.load()[e.key])
+                end
                 local sel_e, running2 = 1, true
                 local function draw_set()
                     wr.fb_fill(0, 0, W, H, 0x00)
@@ -423,10 +525,10 @@ if not SMOKE then
                     wr.fb_fill(16, 14 + TITLE_H, W - 32, 2, 0xFF)
                     for i, e in ipairs(entries) do
                         local y = Y0 + (i - 1) * ITEM_H
-                        local curv = tonumber(Config.load()[e.key]) or 0
+                        local curv = current_of(e)
                         local label = e.name
                         for _, o in ipairs(e.opts) do
-                            if o.v == curv then label = label .. "（当前: " .. o.label .. "）" end
+                            if tostring(o.v) == curv then label = label .. "（当前: " .. o.label .. "）" end
                         end
                         if i == sel_e then
                             wr.fb_fill(12, y - 6, W - 24, ITEM_H - 6, 0xFF)
@@ -451,9 +553,9 @@ if not SMOKE then
                     elseif k == "Press" then
                         -- 值选择屏（通用）
                         local e = entries[sel_e]
-                        local curv = tonumber(Config.load()[e.key]) or 0
+                        local curv = current_of(e)
                         local sel_v = 1
-                        for i, o in ipairs(e.opts) do if o.v == curv then sel_v = i end end
+                        for i, o in ipairs(e.opts) do if tostring(o.v) == curv then sel_v = i end end
                         local function draw_vals()
                             wr.fb_fill(0, 0, W, H, 0x00)
                             text(16, 14, e.name, 0xFF, ft_main)
@@ -479,8 +581,13 @@ if not SMOKE then
                             elseif k2 == "Down" then
                                 sel_v = sel_v + 1; if sel_v > #e.opts then sel_v = 1 end; draw_vals()
                             elseif k2 == "Press" then
-                                Config.set(e.key, e.opts[sel_v].v)
-                                show("已设置（下次阅读生效）", true)
+                                local o = e.opts[sel_v]
+                                if e.apply then
+                                    show(e.apply(o), true)
+                                else
+                                    Config.set(e.key, o.v)
+                                    show("已设置（下次阅读生效）", true)
+                                end
                                 picking = false
                             elseif k2 == "Back" or k2 == "Menu" or k2 == "Home" then
                                 picking = false
