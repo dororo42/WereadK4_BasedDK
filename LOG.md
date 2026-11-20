@@ -1,5 +1,17 @@
 # LOG — 动作日志（ub-mode）
 
+### KUAL 菜单改造（用户三项口径，cdbf052）
+
+- **微信读书=主菜单单按钮直接启动**：menu.json 单条 depth-1 action 项（KUAL 源码
+  levelMap 语义：depth-1 items=主菜单按钮），子菜单（启动/报告/恢复三项）去除；
+  点击「微信读书」→ start.sh v3 → 应用。真机 menu.json 已部署（v2 备份 .v2-backup）。
+- **fpcheck「Write fingerprint report」**：独立 KUAL 根级条目保持原位（gawk 调试
+  工具遗留，非本项目功能）；diagnose/recover 脚本保留设备侧走 ssh。
+- **退出报错弹窗取证（无崩溃）**：start.log rc=0、volumd/cvm SIGCONted 干净、无
+  framework 重启；弹窗=cvm 恢复后自身的 Amazon 注册/同步失败（UnknownHostException
+  firs-g7g.amazon.com——Amazon 端点在用户网络不可达，环境性；stock 设备同样出现），
+  与应用退出无因果。非本项目缺陷，无法在不破坏系统的前提下消除。
+
 ## 2026-11-20 · 二轮独立审查：修复面全量复核 + 两个新修复 + 变异复核
 
 **目标**：以 211540 交接为基线（FRESH），对四项需求批次的 11 提交/24 文件（+2007/-97）做 ub-mode + code-review 全量审查。
