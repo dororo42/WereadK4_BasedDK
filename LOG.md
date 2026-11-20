@@ -1,5 +1,67 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-20 · 状态核实+设备复验：工作区的"未完成批次"三处缺陷，补两条 UI 回环护栏
+
+**目标**：用户说「核实目前项目状态，K4 目前上线，可测试」——先确认仓库/设备真实状态，
+再动设备。全程未扫码（wr_rt 续期路径）。
+
+### 核实结论（证据）
+
+- HEAD `dd439d6`，origin/main `2d60216`，**10 个提交未推**；handoff kit（08:11:42）FRESH，
+  但它写「工作区干净」——实际有 6 个未提交文件（08:57–08:58 落笔，即导出之后的进行中批次）。
+- **设备并不在 kit 宣称的版本上**：`md5sum` 对四个 git 版本逐个核，设备 menu.lua/download.lua/
+  reader.lua 全等于 `fc157df`，且 `/mnt/us/weread/lua/lib/config.lua` **不存在**（该文件是
+  `91b19e1` 才加的）→ 结论：`91b19e1` 从未部署到设备。任务板 #1 记的"部署 91b19e1 全量+
+  用户 11:3x 复验"与设备证据冲突；若 11:3x 的视觉复验确有其事，那它验的是旧版，
+  快捷菜单/设置/行距当时并未生效。
+- 未提交批次三处缺陷（都是"看代码看不出来、跑一次就现形"的那类）：
+  1. 🔴 **shelf.lua 开机即崩**：`PAGE` 被改名成 `MAX_ITEMS`，`draw_page` 函数体仍在用 `PAGE`
+     （6 处）；且 `draw_page` 是 5 参数被 4 参数调用（sel_abs 落到 page 位、ft_main 落到
+     sel_abs 位）；按键循环还在按全量 `books` 翻页，而首屏只画裁剪后的 10 本——下标域不一致。
+     `page` 变量也从 `local` 变成了隐式全局。设备旧版能跑、新版没跑过。
+  2. 🟡 **快捷菜单"下载后面 5 章"必然报"成功 5 失败 0"**：它数的是本函数自己那份
+     `chapters`（`_err` 写在 `Download.book` 内部重新 fetch 的那份目录上），
+     `Download.book` 的返回值被丢弃、`dl_err` 声明未用；目录取失败也显示成功。
+  3. 🟡 设置屏退出条件被删掉 `Menu`（值选择屏仍认 Menu）→ 同一功能两层屏键位不一致；
+     设置分支尾部还遗留重复的 `sel = 1 / draw()`（多刷一次墨水屏）。
+- `line_factor` 三档 1.3/1.54/1.8 经 `Config.set → Config.load` 浮点恒等（`o.v == curv`
+  的"当前档"标记依赖它）；`LINE_H_PER_PT` 在行距改造后成为死代码，删。
+
+### 动作
+
+1. **补齐未完成批次**（只做减法+接线，不改设计）：`draw_page(books, sel_abs, ft_main,
+   ft_small, header)` 改为单页渲染（无 page 参数、无 `PAGE`），循环只在裁剪集内导航、
+   Press 取 `shown[sel_abs]`；截断时标题栏自报「书架 · 最近 10 本」，页脚删掉"左右翻页"提示。
+   下载分支改数 `Download.book` 的返回值、失败显示 `dl_err`、`pos >= #chapters` 时直接说
+   "后面没有章节"（否则 `from` 被钳回最后一章、重复下载它）。
+2. **tests/shelf_ui_test.lua**：`wr.*` mock + 10185 本假书架 + 按键脚本驱动整条 UI 回环；
+   给 `_G` 装 `__index` 拦截——**读未定义全局当场 error**，`PAGE` 那类"改名漏改引用"在主机
+   就死（设备 SMOKE 只渲染一帧、不进循环，正是它的盲区）。
+3. **tests/reader_layout_test.lua**：字号/行距进到分页的行为证明（标准档必须复现改造前的
+   固定行高 40px→每页 18 行/全书 5 页，紧凑 21 行、宽松 15 行，末页再翻给出 next_chapter）。
+   锚点是历史事实，不是把公式重述一遍。
+
+### 验证
+
+- `lua5.1 tests/run.lua` → LUA-TESTS-OK (**15 suite(s)**)；`make weread`/`weread-dyn` 0 error；
+  `make host-selftest` → HOST-OK + INPUT-OK。
+- **变异证明两条新测试不是摆设**（`cp` 备份+`cmp` 校验还原，绝不用 `git checkout --`——
+  这些文件未提交，checkout 会连修复一起抹掉）：
+  `for idx = 1, #books`→`PAGE` ⇒ 11 FAIL，首条 `undefined global read: PAGE`；
+  去掉 10 本上限 ⇒ 3 FAIL（`实得 10185 行`、回卷选中 `B10185`）；
+  `line_h` 忽略设置 ⇒ 2 FAIL（三档全 18 行/5 页）。还原后全绿。
+- **真机（在线）**：先 `cp auth.json auth.json.bak-verify`；旧 spool 不删——`mv books
+  books.pre-spool-contract`（3 章带标题头的缓存原地可查）+ 新建空 `books/`；
+  5 个文件定向 scp（md5 双端一致）。
+  `renew_smoke` → 0 failure（会话仍可用、force→replaced、冷却挡住第二次、取到 3066B 真正文）；
+  `dk3_smoke` → 0 failure（新 spool 5 章，「封面」8 字节 ⇒ 标题头确已消失，缓存重跑 0 次网络）；
+  `shelf_smoke` → SHELF-PIXEL-PASS（exit 0，旧写法在此当场崩）；`menu --smoke` → PIXEL-CHECK PASS；
+  `reader_render_smoke` → rows=55 roundtrip OK。
+- **并发写提醒**：任务板 #9/#10（Grok：快捷菜单四选一、书架/目录分页）与 #11/#8（Codex：
+  翻页长按连翻、Back/Menu 拆分）标着 in_progress，与本次动的 menu.lua/shelf.lua/reader.lua
+  同一批文件。我把"裁剪 10 本"补成了自洽实现，而 #10 的计划是"加分页"——两者相互冲突，
+  必须串行，否则谁的版本落地都是偶然。
+
 ## 2026-11-20 · 代码核实批次：快捷菜单 UI + 设置落地 + spool 契约修正（设备离线，全主机验证）
 
 **目标**：用户离开前核实代码并继续项目（设备无关部分）。
