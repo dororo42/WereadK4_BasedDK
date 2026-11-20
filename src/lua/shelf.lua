@@ -12,8 +12,22 @@ local Fonts = require("fonts")
 
 local Shelf = {}
 
-local ROWS = 10             -- 一页行数（首页 = 服务端 books 序前 10 本 ≈ 最近阅读）
-local ROW_H = 46
+local MAX_ITEMS = 10        -- 极简书架：仅显示最近阅读的 10 本（用户口径）
+local ROWS = MAX_ITEMS      -- 单屏 10 行（无翻页）
+local ROW_H = 52
+
+-- 最近阅读排序（纯函数，主机单测直接打）：readUpdateTime 降序，0/缺失排最后。
+-- 服务端 books 原始序 ≠ 最近阅读序（probe_shelf 实证：前 10 本是调试期旧书）。
+function Shelf.by_recent(books)
+    local out = {}
+    for i, b in ipairs(books or {}) do out[i] = b end
+    table.sort(out, function(a, b)
+        local ta = tonumber(a.readUpdateTime) or 0
+        local tb = tonumber(b.readUpdateTime) or 0
+        return ta > tb
+    end)
+    return out
+end
 
 local function ft_text(ft, x, y, s, fg)
     if ft then return wr.fb_text_ft(ft, x, y, s, fg) end
@@ -53,8 +67,7 @@ local function draw_page(books, sel, ft_main, ft_small)
         end
     end
 
-    ft_center(ft_small, H - 44, string.format("第 %d/%d 页 · 共 %d 本 · 上下移动%s 中键选择 返回",
-        page + 1, pages, n, pages > 1 and " 左右翻页" or ""), 0x60)
+    ft_center(ft_small, H - 44, string.format("最近阅读 %d 本 · 上下移动 中键选择 返回", n), 0x60)
     wr.fb_quant()
     wr.fb_refresh(0)
     return last - first + 1
@@ -69,6 +82,12 @@ function Shelf.run()
     Auth.clear_screen("正在同步书架…")
     local data, err = Api.get_shelf()
     local books = (data and type(data.books) == "table") and data.books or nil
+    if books then
+        books = Shelf.by_recent(books)          -- 最近阅读排序
+        local trimmed = {}
+        for i = 1, math.min(MAX_ITEMS, #books) do trimmed[i] = books[i] end
+        books = trimmed                         -- 极简：仅前 10 本
+    end
     if not books then
         Auth.clear_screen("书架拉取失败: " .. tostring(err or "empty"):sub(1, 50))
         local t0 = wr.millis()
