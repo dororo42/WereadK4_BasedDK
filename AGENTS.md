@@ -10,11 +10,8 @@
 
 ## Current Handoff
 
-- Latest: `handoffs/2026-11-19-201146-dk3-login-persistence-device-recheck/HANDOFF.md`
-- Branch: main（2026-11-19 做过历史改写，**指针不钉 SHA**：映射表见 `LOG.md`，一律以 `git log` 为准）
-- Status: 等待设备 + 等待 push 决策 —— 正文链路与会话持久化已落地，`origin/main` 之上的提交**全部未 push**
-  （数量随每次提交变化，看 `git log origin/main..HEAD`）；
-  真机只剩两项：① 免扫码续期复测（`Auth.renew(true)` 期望 `replaced`）② 键位手感验收（`--interactive`）。
-  **硬约束：绝不重复扫码（风控）——登录态只能靠 `wr_rt` 续期，动网络路径前先备份设备上的 auth.json。**
+- Latest: `handoffs/2026-11-20-081142-dk3-review-quickmenu-config/HANDOFF.md`
+- Branch: main @ 91b19e1
+- Status: [TODO: 进行中 / 等待决策 / …]
 
 任何 agent 开始工作前，先读上面的 HANDOFF.md。这份指针由 orbital_handoff 维护，手工交接时请同步更新。
