@@ -132,19 +132,17 @@ function Download.fetch_chapter_text(book_id, chapter_uid, psvts)
         if t0 == "" then
             return nil, "EMPTY-SHARD"
         end
-        local ok, decoded = pcall(Shard.decode, t0)
+        -- 跨分片必须拼接后**单次解码**（plugin decode_content_shards 语义）：
+        -- 各分片只是同一 base64 流的切段，逐片独立解码会从第二片起全错位
+        -- （真机"大范围乱码"根因）。t_1 可选，有则并入同一解码流。
+        local ok1, t1 = pcall(fetch_shard, "/web/book/chapter/t_1")
+        if not ok1 then t1 = nil end
+        local ok, decoded = pcall(Shard.decode_shards, t0, (t1 and t1 ~= "{}" and #t1 > 32) and t1 or nil)
         if not ok then
             return nil, "shard decode: " .. tostring(decoded)
         end
         if decoded == "" then
             return nil, "EMPTY-SHARD"
-        end
-        local ok1, t1 = pcall(fetch_shard, "/web/book/chapter/t_1")
-        if ok1 and t1 and t1 ~= "{}" and #t1 > 32 then
-            local ok2, decoded1 = pcall(Shard.decode, t1)
-            if ok2 then
-                decoded = decoded .. decoded1
-            end
         end
         return decoded
     end
@@ -176,27 +174,21 @@ function Download.fetch_chapter_text(book_id, chapter_uid, psvts)
         return text, err
     end
 
-    -- epub 书：e_0 必有 + e_1/e_3 可选；各分片校验剥 32 前缀后拼正文，整体一次解码
-    local bodies
-    local ok, res = pcall(Shard.decode, e0)
-    if not ok then
-        return nil, "shard decode: " .. tostring(res)
-    end
-    -- e_0 解出的 xhtml 是头部；e_1/e_3 的原始分片需拼进同一解码流（plugin 语义）：
-    -- 这里简化为"每片独立解码后拼接"——xhtml 按块级标签切分，跨片断点在块边界，
-    -- 实测多片书正文完整（单分片 >64KB 才会拆片，简版接受该限制）。
-    bodies = res
+    -- epub 书：e_0 必有 + e_1/e_3 可选；跨分片拼接后**单次解码**（同 txt 路教训，
+    -- 逐片独立解码从第二片起全错位=大范围乱码）。
+    local raws = { e0 }
     for _, ep in ipairs({ "/web/book/chapter/e_1", "/web/book/chapter/e_3" }) do
         local okx, rawx = pcall(fetch_shard, ep)
         if okx and rawx and rawx ~= "{}" and #rawx > 32 then
-            local okd, decodedx = pcall(Shard.decode, rawx)
-            if okd then
-                bodies = bodies .. decodedx
-            end
+            raws[#raws + 1] = rawx
         end
     end
+    local ok, decoded = pcall(Shard.decode_shards, unpack(raws))
+    if not ok then
+        return nil, "shard decode: " .. tostring(decoded)
+    end
 
-    local text = HtmlText.to_text(bodies)
+    local text = HtmlText.to_text(decoded)
     if text == "" then
         -- 纯图片/封面页：剥标签后无文本
         return "[图片页——简版暂不支持图片]"

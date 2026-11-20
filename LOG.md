@@ -1,5 +1,41 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-20 · 二轮验收取证（退出仍重启=exitmenu 假阳性根因 + 乱码=部署缺失+跨分片解码）
+
+**用户二轮报告**：①大范围乱码；②退出仍是重启。
+
+### 取证结论（两个真根因，均确凿）
+
+1. **退出仍重启 = exitmenu:false 假阳性场景**：start.log 证实用户 07:59/08:01 两次测试
+   跑的已是 framework-stop 模式（rc=0/143，无崩溃日志）——弹窗重启的机制是 isword
+   menu.json 启动项 **exitmenu:false**：KUAL 点击后不自杀，framework stop 强杀活着的
+   KUAL booklet → 非自愿死亡被 framework 记为崩溃 → 弹"发生错误"+framework 重启。
+   k4weread.sh 先例依赖的"KUAL 自杀→再停 framework"被 exitmenu:false 破坏。
+   → 修复：menu.json 部署源（kual/menu.json）启动项 **exitmenu:true**，设备已部署
+   （原文件备份 menu.json.orig-isword；kual/menu.json.README 记录机制）。
+2. **大范围乱码 = 两个叠加**：
+   a. **部署缺失**：上一轮 deploy-weread.sh 遇设备掉线未完成（html_text.lua 不在设备、
+      download.lua 无 decode_shards）——用户测到的是旧代码+旧 spool 缓存。
+   b. **跨分片解码错误（真 bug）**：t_0/t_1、e_0/e_1/e_3 只是同一 base64 流的切段，
+      必须拼接后**单次解码**（plugin decode_content_shards 语义）；旧代码逐片独立解码
+      从第二片起全错位。已改 Shard.decode_shards（txt/epub 两路），fetch_chapter_text
+      整体重写（grab_txt 合并 t_1 进解码流；epub 收 e_1/e_3 原始分片入同一解码）。
+3. **部署补全**：全量 lua（含 html_text）+ menu.json + **清空旧解码 spool**（books/*，
+   旧缓存不可信）。html_text 剥 UTF-8 BOM（freetype 渲染为怪字形）。
+
+### 真机复验（全绿）
+
+- menu SMOKE PASS；download_smoke（txt 书重下）PASS——封面页正确显示"[图片]"占位
+- epub_verify：3300070895 ch4 = **8035 字节**、非空白 8005、无 FFFD——标题重复=
+  xhtml 自带 h2 章题（spool 头+正文标题各一次，非乱码）
+- FFFD 全 spool 零命中
+
+### 交用户第三轮复验
+
+KUAL>微信读书>启动微信读书（**菜单会立即消失=exitmenu:true 正常行为**）→ 白底黑字
+菜单 → 开书读正文 → 退出（framework 重建回主屏，不应弹窗）。若仍有异常：
+diagnose.sh 报告 + start.log/KUAL.log。
+
 ## 2026-11-20 · 修复部署与设备侧验收（7 项修复全绿，交用户视觉复验）
 
 **目标**：部署上一批修复（极性/键位/epub/framework 模式）并设备侧逐项验收。

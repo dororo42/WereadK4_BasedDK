@@ -1,0 +1,7 @@
+# menu.json 部署说明
+
+设备 /mnt/us/extensions/weread/menu.json 为 isword 0.3.9 遗留定义。本文件是其
+修正部署源：启动项 **exitmenu:true**（KUAL 先自杀退出 → 再执行脚本 → framework
+stop 不会强杀活着的 KUAL——exitmenu:false 下 KUAL 非自愿死亡被 framework 记为
+崩溃 → 弹"发生错误"+framework 重启，用户实证 2026-11-20）。
+部署：备份设备原文件 → 拷贝本文件 → diff 确认仅 exitmenu 变化。

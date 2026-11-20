@@ -30,6 +30,7 @@ end
 
 function HtmlText.to_text(xhtml)
     local s = tostring(xhtml or "")
+    s = s:gsub("^\xEF\xBB\xBF", "")               -- UTF-8 BOM（freetype 渲染为怪字形）
     -- 图片占位（块级，前后断行）
     s = s:gsub("<%s*img[^>]*>", "\n[图片]\n")
     -- 块级闭合标签 → 换行（在剥其余标签之前）。
