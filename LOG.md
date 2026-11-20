@@ -1,5 +1,28 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-20 · 修复部署与设备侧验收（7 项修复全绿，交用户视觉复验）
+
+**目标**：部署上一批修复（极性/键位/epub/framework 模式）并设备侧逐项验收。
+
+### 结果（全绿）
+
+1. 凭据备份（auth.json.bak-deploy2）→ 全量部署 → 菜单 SMOKE PASS（极性后自检改判亮）。
+2. **epub 路径真机 PASS**（epub_verify.lua）：3300070895《我为什么写作》ch4 = 8018 字节真实正文
+   （"一个书评家的自白 在一个寒冷…"）——乱码修复确认；剥离器保留全角空格缩进。
+3. **epub 章节渲染回环 PASS**（reader_render_smoke 3300070895/ch4）：326 行布局回环 OK +
+   像素 body-max=255（墨量极性黑笔画）。
+4. renew_smoke：0 failure(s)（续期后 3211 字节真实正文）——凭据门禁/续期不受修复影响。
+5. **framework stop/start 生命周期复验**（部署版 start.sh）：stop（日志 "CVM stopped using
+   SIGTERM"）→ weread-dyn → killall(TERM) → framework start（cvm 新 PID 恢复）→ 回 home。
+   退出弹窗重启的崩溃面已移除，待用户 KUAL 实测确认。
+
+### 交用户复验清单
+
+- KUAL>微信读书>启动微信读书：应**白底黑字**主菜单
+- 打开《我为什么写作》：正文正常（封面页显示"[图片页]"占位）
+- 阅读中 Menu/ScreenKB+Down：暂仍开目录（快捷菜单 UI 下批）；ScreenKB+Up=目录
+- 退出：framework 干净重建回主屏，**不应再弹"发生错误"**
+
 ## 2026-11-20 · 首轮交互验收修复（7 项用户实证 → 4 修复 + 2 确认 + 1 误判纠正）
 
 **用户真机报告 7 项，逐条核实：**
