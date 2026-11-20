@@ -19,6 +19,8 @@ local suites = {
     "wrap_test",
     "html_text_test",
     "config_test",
+    "shelf_ui_test",
+    "reader_layout_test",
 }
 
 local total = 0
