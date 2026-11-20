@@ -22,7 +22,6 @@ local Reader = {}
 
 local FT_PATH = "/mnt/us/weread/fonts/wqy-microhei.ttc"
 Reader.FONT_MIN, Reader.FONT_MAX = 18, 40       -- 字号钳制边界（设置 UI 与钳制共用）
-local LINE_H_PER_PT = 40 / 26                    -- 行高随字号等比（原 26px 行高 40）
 
 local function font_size()
     local fs = tonumber(Config.load().font_size) or 26
@@ -31,8 +30,10 @@ local function font_size()
     return fs
 end
 
+-- 行高 = 字号 × 行距系数（设置"行距"档位：紧凑 1.3 / 标准 1.54 / 宽松 1.8）
 local function line_h(fs)
-    return math.floor(LINE_H_PER_PT * fs + 0.5)
+    local factor = tonumber(Config.load().line_factor) or 1.54
+    return math.floor(fs * factor + 0.5)
 end
 local MARGIN_X = 30
 local MARGIN_TOP = 24

@@ -1,6 +1,7 @@
 -- shelf.lua — 书架列表视图（gateway /shelf/sync → 中文列表 → 五向键导航）。
 -- 用法：menu.lua 级联进入；也可独立 weread-dyn lua/shelf.lua（登录态必需）。
--- 交互：Up/Down 移动，Left/Right 翻页，中键选择（阅读占位屏），Back 返回（返回 nil）。
+-- 交互：Up/Down 移动，中键选择（阅读占位屏），Back 返回（返回 nil）。
+-- 无翻页：列表上限 MAX_ITEMS（详见 Shelf.run 的裁剪注释），所以只有一屏可导航。
 
 package.path = "/mnt/us/weread/lua/lib/?.lua;/mnt/us/weread/lua/?.lua;" .. package.path
 
@@ -9,7 +10,7 @@ local Auth = require("auth")
 
 local Shelf = {}
 
-local PAGE = 6                    -- 每页条目数（600×800 可读行高 46px）
+local MAX_ITEMS = 10              -- 极简书架：仅 10 项最近阅读书目（服务端 books 序）
 local FT_PATH = "/mnt/us/weread/fonts/wqy-microhei.ttc"
 
 local function ft_text(ft, x, y, s, fg)
@@ -22,19 +23,16 @@ local function ft_center(ft, y, s, fg)
     ft_text(ft, math.floor((wr.fb_w() - w) / 2), y, s, fg)
 end
 
--- 单页渲染
-local function draw_page(books, page, sel_abs, ft_main, ft_small, header)
+-- 单页渲染：books 即展示全集（已按 MAX_ITEMS 裁剪），页内下标 == 绝对下标
+local function draw_page(books, sel_abs, ft_main, ft_small, header)
     local W, H = wr.fb_w(), wr.fb_h()
     wr.fb_fill(0, 0, W, H, 0x00)
     ft_center(ft_main, 14, header or "书架", 0xFF)
     wr.fb_fill(16, 14 + 40, W - 32, 2, 0xFF)
 
-    local start = page * PAGE
-    for i = 1, PAGE do
-        local idx = start + i
+    for idx = 1, #books do
         local book = books[idx]
-        if not book then break end
-        local y = 70 + (i - 1) * 46
+        local y = 70 + (idx - 1) * 46
         if idx == sel_abs then
             wr.fb_fill(12, y - 6, W - 24, 40, 0xFF)
             ft_text(ft_main, 22, y, tostring(book.title or "未命名"), 0x00)
@@ -47,9 +45,8 @@ local function draw_page(books, page, sel_abs, ft_main, ft_small, header)
         end
     end
 
-    local pages = math.max(1, math.ceil(#books / PAGE))
     ft_center(ft_small, H - 44,
-        string.format("%d/%d 页 · %d 本 · 上下移动 左右翻页 中键选择 返回", page + 1, pages, #books), 0x60)
+        string.format("%d 本 · 上下移动 中键选择 返回", #books), 0x60)
     wr.fb_quant()
     wr.fb_refresh(0)
 end
@@ -73,8 +70,15 @@ function Shelf.run()
         return nil, "shelf fetch failed"
     end
 
-    local page, sel_abs = 0, 1                     -- sel_abs 为 books 绝对下标
-    draw_page(books, page, sel_abs, ft_main, ft_small)
+    -- 极简裁剪：仅前 MAX_ITEMS 项（服务端 books 序≈最近阅读序）
+    local shown = {}
+    for i = 1, math.min(MAX_ITEMS, #books) do
+        shown[#shown + 1] = books[i]
+    end
+    local header = #shown < #books
+        and string.format("书架 · 最近 %d 本", #shown) or "书架"
+    local sel_abs = 1
+    draw_page(shown, sel_abs, ft_main, ft_small, header)
 
     -- SMOKE：渲染一帧 + 像素自检即退（自动化验收）
     if SMOKE then
@@ -89,34 +93,23 @@ function Shelf.run()
         if ft_main then wr.font_close(ft_main) end
         if ft_small then wr.font_close(ft_small) end
         if m < 55 then print("SHELF-PIXEL-FAIL") else print("SHELF-PIXEL-PASS") end
-        return nil, "smoke done, books=" .. #books
+        return nil, "smoke done, shown=" .. #shown .. " books=" .. #books
     end
 
     local running = true
     local selected
     while running do
         local key = wr.input_poll(1000, true)
-        local total = #books
         if key == "Up" then
             sel_abs = sel_abs - 1
-            if sel_abs < 1 then sel_abs = total end
-            page = math.floor((sel_abs - 1) / PAGE)
-            draw_page(books, page, sel_abs, ft_main, ft_small)
+            if sel_abs < 1 then sel_abs = #shown end
+            draw_page(shown, sel_abs, ft_main, ft_small, header)
         elseif key == "Down" then
             sel_abs = sel_abs + 1
-            if sel_abs > total then sel_abs = 1 end
-            page = math.floor((sel_abs - 1) / PAGE)
-            draw_page(books, page, sel_abs, ft_main, ft_small)
-        elseif key == "Left" then
-            page = page - 1; if page < 0 then page = math.ceil(total / PAGE) - 1 end
-            sel_abs = page * PAGE + 1
-            draw_page(books, page, sel_abs, ft_main, ft_small)
-        elseif key == "Right" then
-            page = page + 1; if page > math.ceil(total / PAGE) - 1 then page = 0 end
-            sel_abs = page * PAGE + 1
-            draw_page(books, page, sel_abs, ft_main, ft_small)
+            if sel_abs > #shown then sel_abs = 1 end
+            draw_page(shown, sel_abs, ft_main, ft_small, header)
         elseif key == "Press" then
-            selected = books[sel_abs]
+            selected = shown[sel_abs]
             running = false
         elseif key == "Back" or key == "Menu" or key == "Home" then
             running = false

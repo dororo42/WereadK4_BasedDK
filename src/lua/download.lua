@@ -297,9 +297,10 @@ function Download.ensure_chapter(book_id, chapters, chapter_idx, sess)
 end
 
 -- 批量预取：从目录第 start_pos 项起最多 max_chapters 章；已 spool 的跳过 → 重跑幂等。
+-- on_progress(i_done, total, ch_title) 可选：UI 进度屏回调（菜单"下载后面5章"用）。
 -- 单章失败不中断（后续章节可能正常），失败原因写在该项的 _err 上，reader 缺章时提示。
 -- 返回 chapters | nil, err
-function Download.book(book_id, max_chapters, start_pos)
+function Download.book(book_id, max_chapters, start_pos, on_progress)
     local chapters, err = Download.fetch_catalog(book_id)
     if not chapters or #chapters == 0 then
         return nil, "catalog failed: " .. tostring(err or "empty")
@@ -307,6 +308,8 @@ function Download.book(book_id, max_chapters, start_pos)
     local from = math.min(math.max(tonumber(start_pos) or 1, 1), #chapters)
     local last = math.min(from + math.max(tonumber(max_chapters) or 1, 1) - 1, #chapters)
     local sess = Download.new_session()
+    local total = last - from + 1
+    local done = 0
     for i = from, last do
         local ch = chapters[i]
         if Download.is_spooled(book_id, ch.chapterIdx) then
@@ -314,6 +317,10 @@ function Download.book(book_id, max_chapters, start_pos)
         else
             local text, terr = Download.ensure_chapter(book_id, chapters, ch.chapterIdx, sess)
             ch._err = text and nil or terr
+        end
+        done = done + 1
+        if on_progress then
+            pcall(on_progress, done, total, ch.title)
         end
     end
     return chapters

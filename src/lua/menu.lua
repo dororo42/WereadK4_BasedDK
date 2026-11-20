@@ -181,10 +181,11 @@ local function pick_chapter(chapters, cur_idx)
     end
 end
 
--- 快捷菜单（Menu / ScreenKB+Down，docs/keymap-k4.md §二语义）：阅读态三选一。
--- 返回 "resume" | "toc" | "exit"。Back/Home = 继续阅读（取消）。
-local function quick_menu(ch_title)
-    local items = { "继续阅读", "章节目录", "退出阅读" }
+-- 快捷菜单（Menu / ScreenKB+Down，docs/keymap-k4.md §二语义）：阅读态四选一
+-- （继续阅读/章节目录/下载后面5章/退出阅读）。返回所选项名字符串。
+-- Back/Home = 继续阅读（取消）。items 可选覆盖（默认四项）。
+local function quick_menu(ch_title, items)
+    items = items or { "继续阅读", "章节目录", "下载后面 5 章", "退出阅读" }
     local sel = 1
     local function draw_qm()
         wr.fb_fill(0, 0, W, H, 0x00)
@@ -213,9 +214,9 @@ local function quick_menu(ch_title)
         elseif key == "Down" then
             sel = sel + 1; if sel > #items then sel = 1 end; draw_qm()
         elseif key == "Press" then
-            return ({ "resume", "toc", "exit" })[sel]
+            return items[sel]
         elseif key == "Back" or key == "Home" then
-            return "resume"
+            return "继续阅读"
         end
     end
 end
@@ -281,9 +282,9 @@ local function read_book(book_id)
         elseif ret.action == "quickmenu" then
             -- 进度已在上方统一落盘；此处只做分支
             local qm = quick_menu(ch.title)
-            if qm == "exit" then
+            if qm == "退出阅读" then
                 return
-            elseif qm == "toc" then
+            elseif qm == "章节目录" then
                 local pick = pick_chapter(chapters, cur_idx)
                 if pick == "exit" then
                     return
@@ -293,6 +294,34 @@ local function read_book(book_id)
                 else
                     page = ret.page          -- 目录取消 → 回原页
                 end
+            elseif qm == "下载后面 5 章" then
+                -- 批量预取 pos+1 起 5 章（进度屏；已 spool 的跳过 → 幂等）
+                if pos >= #chapters then
+                    Auth.clear_screen("已是最后一章，后面没有可下载的章节")
+                    local t0 = wr.millis()
+                    while wr.millis() - t0 < 1200 do end
+                else
+                    local dl, dlerr = Download.book(book_id, 5, pos + 1, function(i, total, t)
+                        Auth.clear_screen(string.format("下载 %d/%d: %s",
+                            i, total, clip(tostring(t or ""), 18)))
+                    end)
+                    -- 成功/失败只能数 Download.book 返回的那份目录：_err 写在它自己的条目上，
+                    -- 本函数的 chapters 是另一次 fetch_catalog 的结果，永远没有 _err。
+                    local okn, failn = 0, 0
+                    if dl then
+                        for i = pos + 1, math.min(pos + 5, #dl) do
+                            if dl[i] then
+                                if dl[i]._err then failn = failn + 1 else okn = okn + 1 end
+                            end
+                        end
+                    end
+                    Auth.clear_screen(dlerr
+                        and ("下载失败: " .. clip(tostring(dlerr), 40))
+                        or string.format("下载完成: 成功 %d 失败 %d", okn, failn))
+                    local t0 = wr.millis()
+                    while wr.millis() - t0 < 1200 do end
+                end
+                page = ret.page
             else
                 page = ret.page              -- 继续阅读：回原页
             end
@@ -380,19 +409,26 @@ if not SMOKE then
                 end
                 draw()
             elseif items[sel] == "设置" then
-                -- 字号选择（最小设置集）：20/22/26/30，落 config.json，下次阅读生效
-                local sizes = { 20, 22, 26, 30 }
-                local cur = tonumber(Config.load().font_size) or 26
-                local sel_fs, running2 = 1, true
-                for i, v in ipairs(sizes) do if v == cur then sel_fs = i end end
-                local function draw_fs()
+                -- 设置主屏：字号 / 行距（共用值选择器，落 config.json，下次阅读生效）
+                local entries = {
+                    { key = "font_size",   name = "字号",
+                      opts = { {label="20 pt",v=20},{label="22 pt",v=22},{label="26 pt",v=26},{label="30 pt",v=30} } },
+                    { key = "line_factor", name = "行距",
+                      opts = { {label="紧凑",v=1.3},{label="标准",v=1.54},{label="宽松",v=1.8} } },
+                }
+                local sel_e, running2 = 1, true
+                local function draw_set()
                     wr.fb_fill(0, 0, W, H, 0x00)
-                    text(16, 14, "设置 · 字号", 0xFF, ft_main)
+                    text(16, 14, "设置", 0xFF, ft_main)
                     wr.fb_fill(16, 14 + TITLE_H, W - 32, 2, 0xFF)
-                    for i, v in ipairs(sizes) do
+                    for i, e in ipairs(entries) do
                         local y = Y0 + (i - 1) * ITEM_H
-                        local label = tostring(v) .. " pt" .. (v == cur and "（当前）" or "")
-                        if i == sel_fs then
+                        local curv = tonumber(Config.load()[e.key]) or 0
+                        local label = e.name
+                        for _, o in ipairs(e.opts) do
+                            if o.v == curv then label = label .. "（当前: " .. o.label .. "）" end
+                        end
+                        if i == sel_e then
                             wr.fb_fill(12, y - 6, W - 24, ITEM_H - 6, 0xFF)
                             text(22, y, label, 0x00, ft_main)
                         else
@@ -400,22 +436,57 @@ if not SMOKE then
                         end
                     end
                     if ft_small then
-                        wr.fb_text_ft(ft_small, 16, H - 40, "上下移动 中键确认 返回", 0x60)
+                        wr.fb_text_ft(ft_small, 16, H - 40, "上下移动 中键进入 返回", 0x60)
                     end
                     wr.fb_quant()
                     wr.fb_refresh(0)
                 end
-                draw_fs()
+                draw_set()
                 while running2 do
                     local k = wr.input_poll(1000, true)
                     if k == "Up" then
-                        sel_fs = sel_fs - 1; if sel_fs < 1 then sel_fs = #sizes end; draw_fs()
+                        sel_e = sel_e - 1; if sel_e < 1 then sel_e = #entries end; draw_set()
                     elseif k == "Down" then
-                        sel_fs = sel_fs + 1; if sel_fs > #sizes then sel_fs = 1 end; draw_fs()
+                        sel_e = sel_e + 1; if sel_e > #entries then sel_e = 1 end; draw_set()
                     elseif k == "Press" then
-                        Config.set("font_size", sizes[sel_fs])
-                        show("字号已设置: " .. sizes[sel_fs] .. " pt（下次阅读生效）", true)
-                        running2 = false
+                        -- 值选择屏（通用）
+                        local e = entries[sel_e]
+                        local curv = tonumber(Config.load()[e.key]) or 0
+                        local sel_v = 1
+                        for i, o in ipairs(e.opts) do if o.v == curv then sel_v = i end end
+                        local function draw_vals()
+                            wr.fb_fill(0, 0, W, H, 0x00)
+                            text(16, 14, e.name, 0xFF, ft_main)
+                            wr.fb_fill(16, 14 + TITLE_H, W - 32, 2, 0xFF)
+                            for i, o in ipairs(e.opts) do
+                                local y = Y0 + (i - 1) * ITEM_H
+                                if i == sel_v then
+                                    wr.fb_fill(12, y - 6, W - 24, ITEM_H - 6, 0xFF)
+                                    text(22, y, o.label, 0x00, ft_main)
+                                else
+                                    text(22, y, o.label, 0xFF, ft_main)
+                                end
+                            end
+                            wr.fb_quant()
+                            wr.fb_refresh(0)
+                        end
+                        draw_vals()
+                        local picking = true
+                        while picking do
+                            local k2 = wr.input_poll(1000, true)
+                            if k2 == "Up" then
+                                sel_v = sel_v - 1; if sel_v < 1 then sel_v = #e.opts end; draw_vals()
+                            elseif k2 == "Down" then
+                                sel_v = sel_v + 1; if sel_v > #e.opts then sel_v = 1 end; draw_vals()
+                            elseif k2 == "Press" then
+                                Config.set(e.key, e.opts[sel_v].v)
+                                show("已设置（下次阅读生效）", true)
+                                picking = false
+                            elseif k2 == "Back" or k2 == "Menu" or k2 == "Home" then
+                                picking = false
+                            end
+                        end
+                        draw_set()
                     elseif k == "Back" or k == "Menu" or k == "Home" then
                         running2 = false
                     end

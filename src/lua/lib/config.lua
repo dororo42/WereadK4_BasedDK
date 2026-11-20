@@ -10,7 +10,7 @@ local Config = {}
 Config.PATH = "/mnt/us/weread/data/config.json"
 
 -- 默认值集中一处：新键只在这里加，旧 config.json 自动补默认。
-Config.DEFAULTS = { font_size = 26 }
+Config.DEFAULTS = { font_size = 26, line_factor = 1.54 }   -- 行高 = 字号 × line_factor
 
 function Config.load()
     local data = {}

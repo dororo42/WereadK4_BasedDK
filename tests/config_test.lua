@@ -23,6 +23,7 @@ check("load.roundtrip", Config.load().font_size == 30)
 -- 3) 保留用户键 + 补默认
 check("set.extra_key", Config.set("theme", "dark") and Config.load().theme == "dark")
 check("defaults.filled", Config.load().font_size == 30)
+check("line_factor.default", Config.load().line_factor == 1.54)
 
 -- 4) 损坏文件 → 回默认（不崩溃）
 local f = io.open(TMP, "w"); f:write("{broken"); f:close()
