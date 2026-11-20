@@ -1,9 +1,13 @@
 # kual/ — KUAL 集成（DK-4）
 
-KUAL 菜单（设备 `/mnt/us/extensions/weread/`，isword 0.3.9 遗留定义）三项：
-启动微信读书 / 生成兼容报告 / 恢复启动状态。**menu.json 未改动**（铁律：不替换
-isword 安装；三项 action 指向的脚本此前全部缺失=启动无反应的根因），本目录补齐
-三个脚本，部署到 `/mnt/us/weread/`（menu.json 的绝对路径处）。
+KUAL 主菜单显示**单个「微信读书」按钮，点击直接启动**（menu.json 单条 depth-1
+action 项=KUAL 主菜单按钮，无子菜单；exitmenu:true=点击后 KUAL 自杀退出再跑脚本）。
+2026-11-21 按用户口径改造（原 isword 0.3.9 三项子菜单已去除，原文件备份为
+设备 menu.json.v2-backup）。
+
+诊断/恢复两个脚本仍在 `/mnt/us/weread/`（ssh 调用；不再占用 KUAL 菜单位）。
+另：fpcheck 扩展的「Write fingerprint report」为独立 KUAL 根级条目（gawk 调试
+工具遗留），保持原位未动。
 
 ## KUAL 执行机制（k4weread.sh 取证）
 
