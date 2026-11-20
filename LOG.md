@@ -1,5 +1,96 @@
 # LOG — 动作日志（ub-mode）
 
+## 2026-11-20 · 书架分页 + 可换字体 + 全本下载 + 进度同步（四项需求，主机 19 套 + 真机三项取证）
+
+**目标**：用户「按键复验均通过，提交推送，请阐述书架原理，是否必须先下载全数据？若是则加分页，
+首批只显示最近10本；增加可换字体选项；下载增加全本下载选项（且默认）；增加进度同步，与微信读书端
+保持一致的选项，请学习weread_k4插件」。本批次先取证回答书架问题，再按条件实施四项。
+
+### 书架原理（取证结论，不是推测）
+
+- `/shelf/sync` **没有分页参数**：`api.lua` 的 gateway 请求体只有 `api_name/skill_version`
+  （无 params 字段），而一次响应就带回全部条目——请求构造与响应体量两头对上。
+  真机量级（一次性探针 `/tmp/shelf_probe.lua`，设备 /tmp 运行，不入库）：
+  `get_shelf_ms=13903`、`books=10187 / archive=22 / albums=37 / mp=0`、
+  重编码 JSON `4 882 297 B`。
+- 因此**元数据必须一次拉全**（服务端不提供分页窗口），但**正文不是**：正文按章走
+  `/web/book/chapter/t_*`，只在阅读到该章时下载（`download.lua` spool），书架从不预取正文。
+- 结论落到实现：分页是**客户端渲染分页**（不是网络分页）。`shelf.lua` 只保留一个状态
+  `sel`（全集绝对下标），页号/行区间全部由它导出——没有第二个状态可以与之错位。
+  `ROWS=10`，首页 = 服务端 books 序前 10 本（≈最近阅读，符合用户口径）；Up/Down 在全集内
+  移动并跨页回卷，Left/Right 整页翻，页间也回卷。10187 本 = 1019 页。
+
+### 四项实现
+
+1. **分页**（`src/lua/shelf.lua`）：`draw_page(books, sel, …)` 单页渲染 + `go_page(delta)`
+   页回卷；页脚 `第 p/P 页 · 共 N 本`，单页时不提示翻页。
+2. **可换字体**（新 `src/lua/lib/fonts.lua`）：字体路径原先硬编码在 menu/shelf/reader/auth
+   四个文件里，换一次字体要改四处；现在只有 fonts.lua 知道候选与回退（`CANDIDATES` 6 项、
+   `probe` 是可替换的缝、`open` 不带回退供设置屏验真伪、`load` 带回退保证读得了书）。
+   设置屏新增「字体」项：切换时先在设备上真开一次 face，**打不开就不写 config**，
+   打开成功则立即重开菜单主/小字面（这一屏就是预览）。
+3. **下载全本**（`menu.lua` 快捷菜单 + `download.lua`）：快捷菜单加「下载全本」并排在
+   「下载后面 5 章」之前；`count = math.huge, from = 1`。下载中用
+   `wr.input_poll(0, true)` 非阻塞轮询给取消时机（单进程无异步，这是批量下载里唯一的按键
+   窗口），Back 即停，已落盘的章保留——`is_spooled` 跳过使重跑等于续传（幂等）。
+   汇总改由 `Download.book` 的第三个返回值 `stats{total,done,ok,fail,cancelled}` 给出：
+   原先调用方自己数 `_err`，数的是它那份目录，而 `_err` 写在返回的那份上——**数字失真**。
+4. **进度同步**（新 `src/lua/sync.lua` + `menu.lua` 打开书本时）：拉云端
+   `/book/getprogress`，按插件口径比较（`SAME_THRESHOLD_PERCENT=2`），云端领先或本地没记过
+   才跳过去，并给可见回执；设置项「云端进度」=关 时整段跳过、一个请求都不发。
+   「同步进度」菜单项原先是死项（只 print「已选择」），现在对最近一本强制拉一次并回报判异结果。
+   上报方向不需要手动入口：离开每章时 `Report.send` 已经发过。
+   `Progress.set` 补 `total_pages`——没有分母，本地页码与服务端 percent 根本不可比。
+
+### 验证
+
+- 主机：`lua5.1 tests/run.lua` → **LUA-TESTS-OK (19 suite(s))**（`tests/run.lua` 收录
+  15→19 套：新增 fonts_test / download_batch_test / sync_test / menu_ui_test）。本批次新增/重写
+  `menu_ui_test`(12 例) `shelf_ui_test`(8 例) `fonts_test`(8 例) `download_batch_test`(7 例)
+  `sync_test`(10 例)，`reader_layout_test` 补 `{fraction=}` 跳转例。
+- `menu_ui_test` 的 harness 是**严格**的：`wr` 与各模块桩都过 `strict()`，读到桩里没有的名字
+  直接报错（静默 nil 会把"桩没跟上 menu.lua"伪装成"菜单坏了"）；`_G` 装 `__index` 拦未定义
+  全局。两处护栏各自抓到过真缺陷：本批次写第一版时 `local DEFAULT_FONT` 被并进注释行 →
+  立刻报 `undefined global read: DEFAULT_FONT`。
+- 变异测试 `tools/mut-menu.sh`：**13/13 KILLED**，RESTORE-OK。含 M12 `Sync.remote`→`Sync.pull`
+  与 M13 `Report.position_of`→`position2` 两例专测严格桩（真机形态分别是崩溃与死键）。
+- 真机（K4 在线窗口内完成，之后设备掉线）：
+  - `weread-dyn lua/menu.lua --smoke` → EXIT=0，`menu done, sel=1 (smoke) ft=on`，dmesg 无异常。
+  - `lua/shelf_smoke.lua --smoke` → `SHELF-PIXEL-PASS`、EXIT=0，**real 15.62s**
+    （含 13.9s 的 10187 本全量元数据拉取），新 `draw_page` 在全量数据上渲染正常。
+  - `lua/fonts_smoke.lua`（新增）→ 6 个候选 exists=yes 且 freetype open=ok，
+    `listable=6`，`FONTS-SMOKE-PASS`。其中**同时常驻 5 个 face** 这一项是对
+    `render.h WR_FT_MAX_FONTS 4→8` 扩容的直接证据：`wr_ft_load()` 无去重，每次调用占一个槽，
+    槽满即 `-ENOMEM`，旧构建在第 5 个必失败。
+- C 层重建：`make weread` + `make weread-dyn`（-Wall -Wextra 无新警告）；设备上两个名字
+  都指向 3 018 684 B 的 dyn 构建。
+
+### 顺带发现并修掉的一处泄露（提交前扫描）
+
+提交前按纪律 grep 内网网段，命中**两处已在公开仓库里的字面 IP**：
+`tools/deploy-kual.sh:5` 把它写成 `K4_HOST` 的默认值（该脚本连 k4-env.local.sh 都不 source），
+以及 LOG 里一行历史叙述。** tip 已修**：deploy-kual.sh 改成与 deploy-weread.sh 同配方
+（source local env + `:?` 强制），LOG 那行改成 `<K4_HOST-host>`。
+注意：旧条目里那句"`192.168.` 段全仓零命中"当时就不成立（正是这条默认值），
+且已推送的历史里值仍在——历史清理属用户已明确"暂时不处理"的事项，本轮只做 tip 收敛。
+
+### 坑与教训
+
+- **变异脚本绝不接 `| head`**：上一批 `bash /tmp/mut.sh | head -1` 的 SIGPIPE 杀在
+  `cp` 还原之前，把变异 M2 留在了 shelf.lua 树里（症状：单跑绿、进 runner 11 例红 +
+  `bad argument #1 to 'concat'`）。本批次的 `tools/mut-menu.sh` 输出全部落文件，
+  并在末尾 `cmp -s` 断言树与备份逐字节一致（RESTORE-OK）。
+- 设备在字体/书架取证后掉线（`No route to host`，三轮重试不通）——真机剩余项见下。
+- `shelf_smoke.lua` 的 `shown=` 断言是在掉线前部署的，**未在真机跑过**（逻辑与
+  shelf.lua SMOKE 的返回串同源，主机 shelf_ui 覆盖 draw_page 返回值）：待设备回来复跑。
+
+### 下一步
+
+1. 设备上线 → `shelf_smoke`（行数断言）+ `dk3_smoke` / `download_smoke` / `reader_render_smoke`
+   / `read_report_smoke` / `net_smoke` 复跑；设置屏「字体」与快捷菜单「下载全本」需用户按键手感复验。
+2. 死代码已清：`Sync.differs` 无调用方，删除（主机测里那个 `differs` 桩字段一并去掉）。→ 结局: done
+3. 待用户决定：设备侧 9 个 `auth.json.bak-*`、GitHub 旧 SHA 清理、LICENSE。→ 结局: blocked 等用户口径
+
 ## 2026-11-20 · 状态核实+设备复验：工作区的"未完成批次"三处缺陷，补两条 UI 回环护栏
 
 **目标**：用户说「核实目前项目状态，K4 目前上线，可测试」——先确认仓库/设备真实状态，
@@ -532,7 +623,7 @@ DK-3.5 的服务端写入面已打通并证明落盘。两处待办：① `menu.
 
 1. **前提更正（这是本批最重要的发现）**：`tools/k4-env.local.sh` 里 `K4_HOST` 的值已含
    `root@` 前缀，所以我用来判「在线/掉线」的 `bash -c 'exec 3<>/dev/tcp/$K4_HOST/$K4_PORT'`
-   打的是 `/dev/tcp/root@192.168.2.151/2222` —— 无效目标，稳定报 `No route to host`，
+   打的是 `/dev/tcp/<K4_HOST-host>/2222` —— 无效目标，稳定报 `No route to host`，
    被我当成设备离线，还挂了个 10 分钟的轮询监视器去「等它上线」。改用 `ssh -o ConnectTimeout`
    一试就到了认证阶段，设备一直在线。
    另一面也要分清：本批更早的 `ssh` 确实真失败过，设备 dmesg 里
