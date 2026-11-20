@@ -69,7 +69,7 @@
 
 提交前按纪律 grep 内网网段，命中**两处已在公开仓库里的字面 IP**：
 `tools/deploy-kual.sh:5` 把它写成 `K4_HOST` 的默认值（该脚本连 k4-env.local.sh 都不 source），
-以及 LOG 里一行历史叙述。** tip 已修**：deploy-kual.sh 改成与 deploy-weread.sh 同配方
+以及 LOG 里一行历史叙述。**tip 已修**：deploy-kual.sh 改成与 deploy-weread.sh 同配方
 （source local env + `:?` 强制），LOG 那行改成 `<K4_HOST-host>`。
 注意：旧条目里那句"`192.168.` 段全仓零命中"当时就不成立（正是这条默认值），
 且已推送的历史里值仍在——历史清理属用户已明确"暂时不处理"的事项，本轮只做 tip 收敛。
@@ -90,6 +90,11 @@
    / `read_report_smoke` / `net_smoke` 复跑；设置屏「字体」与快捷菜单「下载全本」需用户按键手感复验。
 2. 死代码已清：`Sync.differs` 无调用方，删除（主机测里那个 `differs` 桩字段一并去掉）。→ 结局: done
 3. 待用户决定：设备侧 9 个 `auth.json.bak-*`、GitHub 旧 SHA 清理、LICENSE。→ 结局: blocked 等用户口径
+4. 本批定稿动作：交接文档（本地 only）校验 100/100 READY；`AGENTS.md` 交接指针提交为 `a6df9c7`，
+   本地 `b00672b..a6df9c7` 共 6 个未推提交，等用户点头。→ 结局: blocked 等 push 决策
+5. 更正一处已提交的说法：`40b5bcd` 的提交信息写 "runner 16→19 套"，实际是 **15→19**
+   （`git show b00672b:tests/run.lua | grep -c '_test"'` = 15）。LOG 与交接文档已用正确数；
+   提交信息本身不改写（amend 需用户点头，且它会改变未推提交的 hash）。→ 结局: done
 
 ## 2026-11-20 · 状态核实+设备复验：工作区的"未完成批次"三处缺陷，补两条 UI 回环护栏
 
