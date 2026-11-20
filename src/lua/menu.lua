@@ -1,7 +1,7 @@
 -- menu.lua — DK-1 step2 中文菜单（freetype 主路径 + 8x16 点阵回退）。
 --
--- 字体：vendor/duokan/fonts/wqy-microhei.ttc（多看固件抽取，GPLv2+FE，见 vendor/duokan/README.md）。
--- 缺字体文件时自动回退 step1 点阵路径（英文）——功能不劣化。
+-- 字体：统一走 lib/fonts.lua（唯一决策点，缺文件回退出厂默认 wqy）；本屏另有
+-- 8x16 点阵路径兜底（fb_text），功能不劣化。
 -- 交互：Up/Down 移动，中键(Press) 选择，Back/Menu/Home 退出。
 -- 阅读态键位（翻页/换章/目录）见 docs/keymap-k4.md，声明在 reader.lua 的键位表里。
 -- SMOKE=true 时只渲染一帧 + 像素自检（采样字形区最小灰度）即退出（自动化验收）。
@@ -244,6 +244,9 @@ local function download_batch(book_id, count, from_pos)
     local msg
     if not dl then
         msg = "下载失败: " .. clip(tostring(dlerr), 40)
+    elseif dlerr == "cancelled" then
+        -- Download.book 中断返回：chapters 正常、各章 _err=cancelled
+        msg = "已取消（已完成部分保留）"
     else
         msg = string.format("%s: 成功 %d 失败 %d / 共 %d 章",
             stats.cancelled and "已取消" or "下载完成", stats.ok, stats.fail, stats.total)
