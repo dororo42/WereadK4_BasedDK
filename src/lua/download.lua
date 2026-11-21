@@ -374,6 +374,134 @@ function Download.list_downloaded_chapters(book_id)
     return out
 end
 
+------------------------------------------------------------------ 章图片资产（chapter.tar）
+
+-- epub 章内 <img src="../Images/x.png"> 是包内相对路径，正文分片不含图片数据；
+-- 真实资源在 web chapterInfos 给出的章 tar 包里（真机实证：
+-- tar = https://res.weread.qq.com/wrco/tar_CB_<bookId>_<chapterIdx>）。
+Download.ASSET_DIR = "/mnt/us/weread/data/imgcache"
+
+-- 解析 tar（512B 头 POSIX ustar：name[100]，size 八进制@124，body 512 对齐）。
+-- 只取常规文件；返回 { name=bytes }。插件 tar_entries 同款语义。
+local function tar_entries(data)
+    local out = {}
+    local offset = 1
+    while offset + 512 <= #data do
+        local hdr = data:sub(offset, offset + 511)
+        if hdr:match("^%z+") then break end           -- 两块全零 = 结束
+        local name = hdr:sub(1, 100):match("^([^%z]+)")
+        local size = tonumber(hdr:sub(125, 136):match("%z*(%x+)") or "", 8)
+        if not name or not size or size < 0 or offset + 512 + size > #data + 1 then break end
+        local body_start = offset + 512
+        out[#out + 1] = { name = name, data = data:sub(body_start, body_start + size - 1) }
+        offset = body_start + math.ceil(size / 512) * 512
+    end
+    return out
+end
+Download._tar_entries = tar_entries          -- 主机测试可注入
+
+local tar_map_cache = {}                      -- book_id -> { chapterIdx = tar_url }
+
+function Download.asset_dir(book_id, chapter_uid)
+    return string.format("%s/%s/%s", Download.ASSET_DIR, tostring(book_id), tostring(chapter_uid))
+end
+
+-- web chapterInfos → { chapterIdx = tar_url }（每书会话内缓存一次）。
+function Download.fetch_tar_map(book_id)
+    local cached = tar_map_cache[tostring(book_id)]
+    if cached then return cached end
+    local body = wr.http_req({
+        url = "https://weread.qq.com/web/book/chapterInfos",
+        method = "POST",
+        headers = {
+            ["User-Agent"] = WeRead.USER_AGENT,
+            ["Content-Type"] = "application/json;charset=UTF-8",
+            ["Origin"] = "https://weread.qq.com",
+            ["Referer"] = "https://weread.qq.com/",
+            ["Cookie"] = Cookie.to_header(Api.load_auth().cookies or {}),
+        },
+        body = Json.encode({ bookIds = { tostring(book_id) } }),
+        timeout = 30,
+    })
+    local data = body and Json.decode(body)
+    local map = {}
+    if type(data) == "table" then
+        for _, wrap in pairs(data) do
+            if type(wrap) == "table" then
+                for _, rec in pairs(wrap) do
+                    if type(rec) == "table" and type(rec.updated) == "table" then
+                        for _, ch in ipairs(rec.updated) do
+                            if ch.chapterIdx and ch.tar then
+                                map[tonumber(ch.chapterIdx)] = tostring(ch.tar)
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+    tar_map_cache[tostring(book_id)] = map
+    return map
+end
+
+-- 确保某章图片资产已解包落盘（幂等：目录非空跳过）。失败不致命——
+-- 调用方（ensure_chapter）只记日志，reader 对缺图降级 [图片]。
+function Download.ensure_chapter_assets(book_id, chapter_uid, chapter_idx)
+    local dir = Download.asset_dir(book_id, chapter_uid)
+    local probe = io.open(dir .. "/.done")
+    if probe then probe:close() return dir end
+    local tars = Download.fetch_tar_map(book_id)
+    local url = tars[tonumber(chapter_idx)]
+    if not url then return nil, "no tar" end
+    local auth = Api.load_auth()
+    -- res.weread.qq.com 会 302 到 CDN（真机实证），传输层不跟随 → 手动跟（≤3 跳）
+    local body, status, headers
+    for _ = 1, 3 do
+        body, status, headers = wr.http_req({
+            url = url,
+            method = "GET",
+            headers = {
+                ["User-Agent"] = WeRead.USER_AGENT,
+                ["Referer"] = WeRead.reader_url(book_id, chapter_uid),
+                ["Cookie"] = Cookie.to_header(auth.cookies or {}),
+            },
+            timeout = 60,
+        })
+        if status and tonumber(status) >= 300 and tonumber(status) < 400 then
+            local loc = headers and (headers["location"] or headers["Location"])
+            if not loc or loc == "" then break end
+            url = loc:match("^//") and ("https:" .. loc)
+                or (loc:match("^/") and ("https://weread.qq.com" .. loc) or loc)
+        else
+            break
+        end
+    end
+    if not body or #body < 512 then
+        Log.error(string.format("tar fetch %s ch%d: %s %s", book_id, chapter_idx,
+            tostring(status), body and tostring(#body) or "empty"))
+        return nil, "tar fetch failed"
+    end
+    os.execute("mkdir -p '" .. dir .. "'")
+    for _, e in ipairs(tar_entries(body)) do
+        local name = e.name:match("([^/]+)$")     -- ../Images/x.png → x.png
+        -- tar 成员名带 CB_<bookId>_ 前缀（真机实证 CB_3300057890_note.png），
+        -- 而正文 xhtml 的 src 是裸 basename（note.png）→ 剥前缀对齐
+        local stripped = name:match("^CB_%d+_(.+)$")
+        if stripped then name = stripped end
+        if name and name ~= "" and e.name:match("/$") == nil then
+            local f = io.open(dir .. "/" .. name, "wb")
+            if f then f:write(e.data) f:close() end
+        end
+    end
+    local done = io.open(dir .. "/.done", "w")
+    if done then done:write("1") done:close() end
+    local n = 0
+    local pp = io.popen("ls -1 '" .. dir .. "' | grep -vc '.done'")
+    if pp then n = tonumber(pp:read("*l") or 0) or 0 pp:close() end
+    Log.info(string.format("assets %s ch%d: %d files %dB", book_id, chapter_idx, n, #body))
+    return dir
+end
+
 ------------------------------------------------------------------ 删除（已下载管理）
 
 -- 删除单章 spool 文件（manifest 不动：章数口径不变，下次浏览该章显示未下载）。
@@ -390,6 +518,7 @@ function Download.delete_book(book_id)
     local id = tostring(book_id)
     if not id:match("^%d+$") then return false, "bad book id" end
     os.execute("rm -rf '" .. Download.SPOOL .. "/" .. id .. "'")
+    os.execute("rm -rf '" .. Download.ASSET_DIR .. "/" .. id .. "'")
     Log.info("delete book: " .. id)
     return true
 end
@@ -397,6 +526,7 @@ end
 -- 清空全部已下载（含 manifest；下次进「已下载」在线时回填会重建书目信息）。
 function Download.delete_all()
     os.execute("rm -rf '" .. Download.SPOOL .. "'/*")
+    os.execute("rm -rf '" .. Download.ASSET_DIR .. "'/*")
     Log.info("delete all downloads")
     return true
 end
@@ -446,6 +576,12 @@ function Download.ensure_chapter(book_id, chapters, chapter_idx, sess)
     end
     Log.info(string.format("download %s ch%d bytes=%d %ds",
         book_id, ch.chapterIdx, #text, os.time() - t0))
+    if text:find("\1IMG:") then
+        -- 章内有图：确保 tar 资产解包（失败只留 [图片] 占位，不拦正文）
+        local aerr
+        _, aerr = Download.ensure_chapter_assets(book_id, ch.chapterUid, ch.chapterIdx)
+        if aerr then Log.info("assets unavailable ch" .. ch.chapterIdx .. ": " .. aerr) end
+    end
     local path, serr = Download.save_chapter(book_id, ch.chapterIdx, ch.title, text)
     if not path then
         return nil, serr

@@ -240,6 +240,7 @@ stub("download", {
     is_spooled = function() return false end,
     save_manifest = function(_b, _title, _chs) end,
     list_books = function() return {} end,
+    asset_dir = function(_b, _uid) return "/tmp/stub_assets" end,
     book = function(_b, count, from, cb)
         calls[#calls + 1] = { f = "dl_book", count = count, from = from }
         if dl_result then

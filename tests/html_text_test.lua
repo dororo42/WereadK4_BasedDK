@@ -12,7 +12,8 @@ end
 check("p.strip", HtmlText.to_text("<p>第一段</p><p>第二段</p>") == "第一段\n第二段")
 
 -- 2) 图片占位（封面/插图）
-check("img.placeholder", HtmlText.to_text('<p><img src="a.jpg"/></p>') == "[图片]")
+check("img.marker", HtmlText.to_text('<p><img src="../Images/a.jpg"/></p>') == "\1IMG:a.jpg\1")
+check("img.nosrc", HtmlText.to_text('<p><img/></p>') == "[图片]")
 
 -- 3) 常见实体
 check("entity.named", HtmlText.to_text("A&amp;B&quot;C&quot;") == 'A&B"C"')
@@ -30,7 +31,7 @@ local sample = [[<?xml version="1.0"?><html><head><style>.t{font-size:1em}</styl
 <body><h2>第二章</h2><p>他开始写作&#x3002;</p>
 <div class="block"><img src="cover.jpg"/></div>
 <p>结尾&amp;完</p></body></html>]]
-check("real.sample", HtmlText.to_text(sample) == "第二章\n他开始写作。\n\n[图片]\n\n结尾&完")
+check("real.sample", HtmlText.to_text(sample) == "第二章\n他开始写作。\n\n\1IMG:cover.jpg\1\n\n结尾&完")
 
 print(string.format("html_text_test done: %s (fails=%d)",
       fails == 0 and "ALL PASS" or "HAS FAILURES", fails))

@@ -96,6 +96,24 @@ local ok_all = Download.delete_all()
 check(ok_all ~= false, "清空全部应执行")
 check(#Download.list_books() == 0, "清空后清单应为空")
 
+-- 8) tar 解析：512B POSIX ustar 合成字节（name/size 八进制/512 对齐）
+local function tar_member(name, data)
+    local f = { name, string.rep("\0", 100 - #name),
+        "0000644\0", "0000000\0", "0000000\0",                    -- mode/uid/gid
+        string.format("%011o\0", #data),                            -- size[12] @125
+        string.rep(" ", 8),                                          -- chksum（解析器不校验）
+        "0" .. string.rep("\0", 11) }                               -- typeflag + linkname
+    local h = table.concat(f)
+    h = h .. string.rep("\0", 512 - #h)
+    return h .. data .. string.rep("\0", (512 - #data % 512) % 512)
+end
+local tar_bytes = tar_member("a.png", "PNGDATA") .. tar_member("b.jpg", "JPGBYTES")
+    .. string.rep("\0", 1024)
+local entries = Download._tar_entries(tar_bytes)
+check(#entries == 2, "tar 应解析出 2 个成员，实得 " .. #entries)
+check(entries[1].name == "a.png" and entries[1].data == "PNGDATA", "成员名与内容应一致")
+check(entries[2].data == "JPGBYTES", "第二个成员应完整（512 对齐后偏移正确）")
+
 os.execute("rm -rf '" .. DIR .. "'")
 print("download_list_test done: " .. (fails == 0 and "ALL PASS" or "FAILS=" .. fails) .. " (fails=" .. fails .. ")")
 return fails

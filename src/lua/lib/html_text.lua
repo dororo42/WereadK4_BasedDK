@@ -31,8 +31,16 @@ end
 function HtmlText.to_text(xhtml)
     local s = tostring(xhtml or "")
     s = s:gsub("^\xEF\xBB\xBF", "")               -- UTF-8 BOM（freetype 渲染为怪字形）
-    -- 图片占位（块级，前后断行）
-    s = s:gsub("<%s*img[^>]*>", "\n[图片]\n")
+    -- 图片 → 行内标记 \1IMG:<basename>\1（块级，前后断行）。
+    -- src 常为 epub 包内相对路径（../Images/note.png）——只留 basename，
+    -- 由 reader 用章资产目录（chapter.tar 解包）解析；解析不到降级 [图片]。
+    -- [&amp; 实体此时还没解码，不影响 basename 取尾段]
+    s = s:gsub('<%s*img[^>]-src%s*=%s*"([^"]+)"[^>]*>', function(src)
+        local name = tostring(src):match("([^/]+)%??[^/]*$")
+        if not name or name == "" then return "\n[图片]\n" end
+        return "\n\1IMG:" .. name .. "\1\n"
+    end)
+    s = s:gsub("<%s*img[^>]*>", "\n[图片]\n")   -- 无 src 的 img 兜底占位
     -- 块级闭合标签 → 换行（在剥其余标签之前）。
     -- 注意：Lua 模式没有 | 交替——必须逐标签多趟（曾写成 (p|div|…) 逐字面匹配全不命中）。
     for _, tag in ipairs({ "p", "div", "h1", "h2", "h3", "h4", "h5", "h6",

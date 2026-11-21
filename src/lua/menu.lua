@@ -421,7 +421,7 @@ local function read_book(book_id, force_sync, title_hint)
         local t_open = os.time()
         -- page 要么是整数页码（1 起，负数=末页），要么是 {fraction=0..1}
         -- （云端跳转：页数只有 reader 自己算得出，调用方只能给比例）
-        local ret = Reader.open(body, ch.title, page)
+        local ret = Reader.open(body, ch.title, page, Download.asset_dir(book_id, ch.chapterUid))
         if not ret then
             show("阅读器打开失败", true)
             return

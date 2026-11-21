@@ -17,6 +17,13 @@
 #include "render.h"
 #include "net.h"
 
+/* stb_image（public domain，upstream master 2019-2025 副本，零改动）：jpeg/png/bmp/gif
+ * 全解码，无外部依赖——设备 /usr/lib 有 libjpeg 但 ffi.load 失败，且手工绑
+ * libjpeg 的 struct/jmp 语义风险高，统一走 stb 单实现。 */
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ASSERT(x) do { } while (0)
+#include "stb_image.h"
+
 static struct wr_fb    g_fb;
 static int             g_fb_open;
 static uint8_t        *g_backup;
@@ -219,6 +226,87 @@ static int l_input_poll(lua_State *L)
     return 1;
 }
 
+/* fb_image(x, y, w, h, gray): 8-bit 灰度块直写 fb。
+ * 灰度语义 = 亮度（0=黑 255=白）；fb 是墨量（0x00=白 0xFF=黑）→ 写 255-gray。
+ * 越界部分裁剪，不越界整块才画（调用方负责缩放到屏宽内）。 */
+static int l_fb_image(lua_State *L)
+{
+    if (!g_fb_open) { lua_pushnil(L); lua_pushstring(L, "fb not open"); return 2; }
+    int x = (int)luaL_checkinteger(L, 1);
+    int y = (int)luaL_checkinteger(L, 2);
+    int w = (int)luaL_checkinteger(L, 3);
+    int h = (int)luaL_checkinteger(L, 4);
+    size_t glen;
+    const char *gray = luaL_checklstring(L, 5, &glen);
+    if (w <= 0 || h <= 0 || (size_t)(w * h) > glen) {
+        lua_pushnil(L); lua_pushstring(L, "fb_image size mismatch"); return 2;
+    }
+    for (int ry = 0; ry < h; ry++) {
+        int py = y + ry;
+        if (py < 0 || py >= (int)g_fb.yres) continue;
+        for (int rx = 0; rx < w; rx++) {
+            int px = x + rx;
+            if (px < 0 || px >= (int)g_fb.xres) continue;
+            g_fb.mem[(size_t)py * g_fb.line_length + px] = (uint8_t)(255 - (uint8_t)gray[ry * w + rx]);
+        }
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+/* image_decode(bytes) -> w, h, gray_string | nil, err。
+ * 期望单通道灰度输出（stbi desired_channels=1）；解码失败（非图/裁断）返回 nil。 */
+static int l_image_decode(lua_State *L)
+{
+    size_t dlen;
+    const char *data = luaL_checklstring(L, 1, &dlen);
+    int w, h, n;
+    stbi_uc *px = stbi_load_from_memory((const stbi_uc *)data, (int)dlen, &w, &h, &n, 1);
+    if (!px) {
+        lua_pushnil(L); lua_pushstring(L, stbi_failure_reason());
+        return 2;
+    }
+    size_t sz = (size_t)w * h;
+    lua_pushlstring(L, (const char *)px, sz);
+    stbi_image_free(px);
+    lua_pushinteger(L, w);
+    lua_pushinteger(L, h);
+    return 3;
+}
+
+/* image_scale(gray, w, h, dw, dh) -> 缩放后的灰度串（最近邻点采样）。
+ * 在 C 层做缩放：Lua 侧拼 60 万参数的 string.char 会爆栈。 */
+static int l_image_scale(lua_State *L)
+{
+    size_t glen;
+    const char *gray = luaL_checklstring(L, 1, &glen);
+    int w = (int)luaL_checkinteger(L, 2);
+    int h = (int)luaL_checkinteger(L, 3);
+    int dw = (int)luaL_checkinteger(L, 4);
+    int dh = (int)luaL_checkinteger(L, 5);
+    if (w <= 0 || h <= 0 || dw <= 0 || dh <= 0 || (size_t)(w * h) > glen
+        || (size_t)(dw * dh) > (size_t)1 << 22) {
+        lua_pushnil(L); lua_pushstring(L, "bad scale params"); return 2;
+    }
+    size_t sz = (size_t)dw * dh;
+    char *out = (char *)malloc(sz);
+    if (!out) { lua_pushnil(L); lua_pushstring(L, "oom"); return 2; }
+    for (int dy = 0; dy < dh; dy++) {
+        int sy = (int)((double)dy * h / dh + 0.5);
+        if (sy >= h) sy = h - 1;
+        const char *src = gray + (size_t)sy * w;
+        char *dst = out + (size_t)dy * dw;
+        for (int dx = 0; dx < dw; dx++) {
+            int sx = (int)((double)dx * w / dw + 0.5);
+            if (sx >= w) sx = w - 1;
+            dst[dx] = src[sx];
+        }
+    }
+    lua_pushlstring(L, out, sz);
+    free(out);
+    return 1;
+}
+
 /* ---- misc ---- */
 
 static int l_millis(lua_State *L)
@@ -239,6 +327,9 @@ static const luaL_Reg wr_funcs[] = {
     { "fb_text",     l_fb_text     },
     { "fb_quant",    l_fb_quant    },
     { "fb_get",      l_fb_get      },
+    { "fb_image",    l_fb_image    },
+    { "image_decode", l_image_decode },
+    { "image_scale",  l_image_scale  },
     { "font_load",   l_font_load   },
     { "font_close",  l_font_close  },
     { "fb_text_ft",  l_fb_text_ft  },

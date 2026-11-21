@@ -109,12 +109,38 @@ function Reader.wrap_line(measure, maxw, line)
     return rows
 end
 
--- 章节 → 屏幕行数组（段落间空行）
-function Reader.layout(ft, maxw, text)
+-- 章节 → 屏幕行数组（段落间空行；assets_dir 非空时解析 IMG 标记为图片块）。
+-- 行元素 = 字符串 | 图片块表 { img_w, img_h, img_gray, slot, total, top_pad }：
+-- 图片块占 total 个行槽（含顶部对齐余量），分页切片天然把整块切进同一页——
+-- layout 阶段块超页宽时用空行垫到页边界（原子性，图片不跨页）。
+function Reader.layout(ft, maxw, text, assets_dir, lh)
     local rows = {}
     for line in (text:gsub("\r\n", "\n"):gsub("\r", "\n") .. "\n"):gmatch("(.-)\n") do
         line = line:match("^(.-)%s*$") or ""
-        if line == "" then
+        local img_name = line:match("^\1IMG:(.+)\1$")
+        if img_name then
+            local blk = assets_dir and Reader.load_image_block(assets_dir, img_name, maxw, lh) or nil
+            if blk then
+                -- 原子分页：块总高（行槽）装不进当前页余量 → 垫空行到下一页边界
+                local k = blk.total
+                local row_in_page = #rows % math.max(1, Reader._rows_per_page or 1)
+                local left = math.max(1, Reader._rows_per_page or 1) - row_in_page
+                if k <= left then
+                    blk.top_pad = 0
+                else
+                    blk.top_pad = left % math.max(1, Reader._rows_per_page or 1)
+                    if blk.top_pad == k then blk.top_pad = 0 end
+                    for _ = 1, blk.top_pad do rows[#rows + 1] = "" end
+                end
+                for s = 1, k do
+                    rows[#rows + 1] = { img_w = blk.w, img_h = blk.h, img_gray = blk.gray,
+                        slot = s, total = k, top_pad = blk.top_pad }
+                end
+            else
+                rows[#rows + 1] = "[图片]"
+                rows[#rows + 1] = ""
+            end
+        elseif line == "" then
             rows[#rows + 1] = ""
         else
             for _, r in ipairs(Reader.wrap_line(function(s)
@@ -127,10 +153,49 @@ function Reader.layout(ft, maxw, text)
     return rows
 end
 
+-- 加载并缩放一张图（会话内解码缓存）。返回 { w, h, gray, total } | nil。
+-- 缩放：整宽适配 maxw，等比；高超出页高时截断到页高（罕见：整页插图按高排）。
+Reader._img_cache = {}
+Reader._rows_per_page = nil
+function Reader.load_image_block(assets_dir, name, maxw, lh)
+    local path = assets_dir .. "/" .. tostring(name)
+    local cached = Reader._img_cache[path]
+    if cached ~= nil then return cached or nil end
+    local f = io.open(path, "rb")
+    if not f then
+        -- 前缀残留兜底：解包文件可能仍带 CB_<book>_ 前缀（解析顺序变化时）
+        local pp = io.popen("ls -1 '" .. assets_dir .. "' 2>/dev/null")
+        if pp then
+            for fn in pp:lines() do
+                if fn == tostring(name) or fn:match("[_/]" .. tostring(name):gsub("([%.%[%]%%])", "%%%1") .. "$") then
+                    path = assets_dir .. "/" .. fn
+                    f = io.open(path, "rb")
+                    break
+                end
+            end
+            pp:close()
+        end
+    end
+    if not f then Reader._img_cache[path] = false return nil end
+    local data = f:read("*a")
+    f:close()
+    local gray, w, h = wr.image_decode(data)   -- C 绑定返回序：gray, w, h
+    if not gray or not w or w <= 0 or h <= 0 then Reader._img_cache[path] = false return nil end
+    -- 等比缩放到 maxw 内（最近邻点采样，C 层做——Lua 拼 60 万 string.char 参数会爆栈）
+    local dw = math.min(maxw, w)
+    local dh = math.max(1, math.floor(h * (dw / w) + 0.5))
+    gray = wr.image_scale(gray, w, h, dw, dh)
+    if not gray then Reader._img_cache[path] = false return nil end
+    local blk = { w = dw, h = dh, gray = gray, total = 0 }
+    blk.total = math.ceil(blk.h / (lh or 34)) + 1
+    Reader._img_cache[path] = blk
+    return blk
+end
+
 -- start_page: 起始页（1 起）；传负数表示「从末页开始」——上一章回退时用；
 -- 传 { fraction = 0..1 } 表示按比例定位——云端进度跳转时用（总页数只有本模块
 -- 排版后才算得出，调用方给不了页码，只给得了比例；两解都传时以 fraction 为准）。
-function Reader.open(chapter_text, chapter_title, start_page)
+function Reader.open(chapter_text, chapter_title, start_page, assets_dir)
     assert(wr.fb_open(), "fb_open failed")
     assert(wr.input_open(), "input_open failed")
     local fs = font_size()
@@ -143,8 +208,10 @@ function Reader.open(chapter_text, chapter_title, start_page)
 
     local W, H = wr.fb_w(), wr.fb_h()
     local maxw = W - margin_x() * 2
-    local rows = Reader.layout(ft, maxw, chapter_text)
     local rows_per_page = math.floor((H - margin_top() - MARGIN_BOTTOM) / lh)
+    Reader._rows_per_page = rows_per_page
+    Reader._img_cache = {}
+    local rows = Reader.layout(ft, maxw, chapter_text, assets_dir, lh)
     local total_pages = math.max(1, math.ceil(#rows / rows_per_page))
     local page
     if type(start_page) == "table" then
@@ -162,18 +229,20 @@ function Reader.open(chapter_text, chapter_title, start_page)
         local y = margin_top()
         for i = first + 1, math.min(first + rows_per_page, #rows) do
             local row = rows[i]
-            if row ~= "" then
+            if type(row) == "table" then
+                -- 图片块：仅 slot 1（越过 top_pad 后的首行）绘制一次，其余槽只推进 y
+                if row.slot == (row.top_pad or 0) + 1 then
+                    local ix = math.floor((W - row.img_w) / 2)
+                    wr.fb_image(ix, y, row.img_w, row.img_h, row.img_gray)
+                end
+            elseif row ~= "" then
                 wr.fb_text_ft(ft, margin_x(), y, row, 0xFF)
             end
             y = y + lh
         end
-        -- 页脚：标题 + 进度
-        if ft then
-            local footer = string.format("%s  %d/%d", chapter_title or "", page, total_pages)
-            local w = wr.font_width(ft, footer) or #footer * 13
-            wr.fb_text_ft(ft, math.floor((W - math.min(w, maxw)) / 2), H - MARGIN_BOTTOM + 12,
-                footer, 0x60)
-        end
+        -- 页脚：标题 + 进度（16px 点阵定宽灰字居中：不占 freetype 槽位、不随正文字号）
+        local footer = string.format("%s  %d/%d", chapter_title or "", page, total_pages)
+        wr.fb_text(math.floor((W - #footer * 8) / 2), H - MARGIN_BOTTOM + 14, footer, 1, 0x60)
         wr.fb_quant()
         wr.fb_refresh(0)
     end

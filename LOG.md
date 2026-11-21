@@ -1,5 +1,39 @@
 # LOG — 动作日志（ub-mode）
 
+### 图片加载落地 + 遗留清理（用户口径：清理+持续优化+修复图片加载）
+
+**清理**：/mnt/us/weread/bin（34.8MB，闭源包 kindlehf/kindlepw2 多设备遗留）+
+weread.pre-1120-sync（3MB 旧副本）→ 备份 tar 落本机 backups/（17MB）后删除；
+/mnt/us/weread 53→15.4MB，/mnt/us 使用率 45%。
+
+**图片链路（全取证驱动，DK-3 图片路径落地）**：
+1. 取证：epub 章 xhtml 的 `<img src="../Images/note.png">` = 包内相对路径；
+   正文分片不含图；资源在 web `/web/book/chapterInfos` 响应的 `chapter.tar`
+   （res.weread.qq.com/wrco/tar_CB_<book>_<idx>，302→CDN）；tar 成员名带
+   `CB_<bookId>_` 前缀（CB_3300057890_note.png）与正文裸 basename 不对齐；
+   chapterInfos 的 files 数组=xhtml 清单非图片映射。
+2. C 层：stb_image（public domain，upstream 副本；SDL3 vendored 副本有
+   Uint8/Sint16 类型污染弃用）编入 wrbridge：`wr.image_decode(bytes)`→gray,w,h、
+   `wr.image_scale`（**缩放必须在 C**：Lua 拼 60 万 string.char 参数爆栈）、
+   `wr.fb_image(x,y,w,h,gray)`（亮度→墨量 255-gray，越界裁剪）。weread-dyn
+   3.02→3.08MB。**绑定返回序 = gray,w,h**（先串后数）。
+3. Lua：html_text img→`\1IMG:<basename>\1` 标记（无 src 兜底 [图片]）；
+   download `fetch_tar_map`（web chapterInfos，每书缓存）+`ensure_chapter_assets`
+   （tar 下载 302 手动跟≤3 跳 + 512B ustar 解析 + `CB_%d+_` 前缀剥除落盘
+   imgcache/<book>/<uid>/ + .done 幂等）；ensure_chapter 正文含标记时自动取资产
+   （失败不拦正文）；delete_book/all 同步清 imgcache。
+4. reader 块级排版：layout 行元素=字符串|图片块表（占 total 行槽，槽=页高/lh+1，
+   块内原子不跨页——装不下垫空行到页界）；draw 仅 slot=top_pad+1 画一次；
+   解码会话缓存；资产查找精确名+`_name$` 后缀兜底。
+5. **顺手修正上批静默未生效的补丁**：reader 页脚点阵化实际没落盘（python
+   replace 无校验的 no-op，f1c129d 描述不准）——本批以 assert 驱动替换落实。
+
+**设备端到端实证**：游隼 ch3 重下→tar 2341B note.png 解包落盘→PNG 解码
+48×48→fb_image 黑/白极性像素级验证（黑→255/白→0）→layout 4 标记→4 块×3 槽
+共 217 行。测试：html_text 标记断言 + tar 解析合成字节断言 + menu_ui 桩补
+asset_dir，**23 套全绿**。
+
+
 ### 菜单重组+设置分组/边距+运行状态修复+已下载删除+硬件占用对比
 
 **用户口径**：同步进度/检查连接/运行状态归入设置；设置分组+分组线；设置加
