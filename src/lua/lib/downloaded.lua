@@ -7,6 +7,9 @@
 --
 -- UI 复用 menu.lua 的字体句柄由调用方传入（ft_main/ft_small/text），保持单一渲染决策。
 
+local Api = require("api")
+local Auth = require("auth")
+local Log = require("log")
 local Download = require("download")
 local Fonts = require("fonts")
 local Progress = require("progress")
@@ -90,6 +93,52 @@ local function fmt_bytes(b)
     return string.format("%dKB", math.floor(b / 1024))
 end
 
+-- 章条目构造（纯函数，主机可测）：list_loop 需要 label，阅读需要原章数据——
+-- 两者都挂在同一包装表上，取章数据必须走 .chapter（曾因直取包装表把 nil text
+-- 传进 Reader.open 崩掉整个应用：reader.lua layout 对 nil gsub）。
+function DL._chapter_entries(chs)
+    local out = {}
+    for _, c in ipairs(chs) do
+        out[#out + 1] = {
+            label = string.format("%d. %s", c.chapterIdx, c.title),
+            chapter = c,
+        }
+    end
+    return out
+end
+
+-- 旧书回填（manifest 体系之前落的 spool 只有书号）：shelf 查书名 + catalog 拉
+-- 目录 → save_manifest。一次性（manifest 落盘后 list_books 不再报缺）；未登录或
+-- 任一网络失败 → 静默保留现状（title=id），离线浏览不因此不可用。
+-- notify(msg) 用于过程提示（browse 传屏提示；主机测试传 nil）。
+function DL._backfill(all, notify)
+    local missing = {}
+    for _, b in ipairs(all) do
+        if (b.chapters_total or 0) == 0 then missing[#missing + 1] = b end
+    end
+    if #missing == 0 or not Api.has_login() then return 0 end
+    if notify then notify("正在补全书目信息（" .. #missing .. " 本）…") end
+    local shelf = Api.get_shelf()
+    local by_id = {}
+    if shelf and type(shelf.books) == "table" then
+        for _, s in ipairs(shelf.books) do by_id[tostring(s.bookId)] = s end
+    end
+    local done = 0
+    for _, b in ipairs(missing) do
+        local s = by_id[tostring(b.bookId)]
+        local title = s and tostring(s.title or "") or ""
+        if title ~= "" and title ~= tostring(b.bookId) then
+            local chapters = Download.fetch_catalog(b.bookId)
+            if chapters and #chapters > 0 then
+                Download.save_manifest(b.bookId, title, chapters)
+                Log.info("backfill manifest: " .. b.bookId .. " " .. title)
+                done = done + 1
+            end
+        end
+    end
+    return done
+end
+
 -- 入口：已下载书目 → 章 → 阅读。需 fb/input 已开（menu 级联共享）。
 -- 返回 nil（Back 层层退出）。
 function DL.browse()
@@ -97,6 +146,14 @@ function DL.browse()
     local ft_small = Fonts.load(FT_SMALL_PX)
 
     local all = Download.list_books()
+    if #all > 0 then
+        local n = DL._backfill(all, function(msg)
+            Auth.clear_screen(msg)
+        end)
+        if n > 0 then
+            all = Download.list_books()      -- 回填成功 → 标题/章数立即生效
+        end
+    end
     if #all == 0 and ft_main then
         wr.fb_fill(0, 0, wr.fb_w(), wr.fb_h(), 0x00)
         ft_text(ft_main, 40, 200, "暂无下载内容", 0xFF)
@@ -109,6 +166,7 @@ function DL.browse()
         return
     end
 
+    Log.info(string.format("downloaded browse: %d books", #all))
     -- 层 1：书目（label = 标题 + 已下载章数/大小）
     local book_entries = {}
     for _, b in ipairs(all) do
@@ -131,19 +189,14 @@ function DL.browse()
             local t0 = wr.millis()
             while wr.millis() - t0 < 1200 do end
         else
-            local ch_entries = {}
-            for _, c in ipairs(chs) do
-                ch_entries[#ch_entries + 1] = {
-                    label = string.format("%d. %s", c.chapterIdx, c.title),
-                    chapter = c,
-                }
-            end
+            local ch_entries = DL._chapter_entries(chs)
             local sel_ch = list_loop(ft_main, ft_small, ch_entries,
                 book.title .. " · 已下载 " .. #chs .. " 章")
             if sel_ch then
-                local c = ch_entries[sel_ch]
+                local c = ch_entries[sel_ch].chapter
                 local rec = Progress.get(book.bookId)
                 local page = (rec and rec.chapter_idx == c.chapterIdx and rec.page) or 1
+                Log.info(string.format("offline open: %s ch%d", book.bookId, c.chapterIdx))
                 Reader.open(c.text, c.title, page)
             end
         end

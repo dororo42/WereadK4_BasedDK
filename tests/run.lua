@@ -21,6 +21,7 @@ local suites = {
     "config_test",
     "log_test",
     "download_list_test",
+    "downloaded_test",
     "shelf_recent_test",
     "fonts_test",
     "download_batch_test",

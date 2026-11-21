@@ -1,5 +1,45 @@
 # LOG — 动作日志（ub-mode）
 
+### 已下载点击崩溃 + 书名回填（真机取证 reader.lua:105）
+
+**用户报**：已下载列表显示书号非书名；点击打不开；退出后报错。
+
+### 取证
+
+- start.sh v3 的应用输出重定向在 `/mnt/us/weread/data/start.log`（非 KUAL.log——
+  KUAL.log 是 11-20 的陈旧文件，此前的排障误把 KUAL.log 当现场）。真机日志：
+  `lua error: reader.lua:105: attempt to index local 'text' (a nil value)`，rc=1，
+  08:40/18:14 两次会话同一错误。点击→应用崩溃→无响应；"退出后报错"=崩溃下游
+  （framework 恢复期弹窗），非独立缺陷。
+
+### 动作
+
+1. **解包 bug 修复（downloaded.lua 层2）**：`ch_entries[sel_ch]` 是
+   `{label, chapter}` 包装表，旧代码直取 `c.text/c.title/c.chapterIdx`——全 nil →
+   `Reader.open(nil,...)` → `Reader.layout` 对 nil `gsub` 崩掉整个应用。修复=取
+   `.chapter`；抽出纯函数 `DL._chapter_entries`（回归钉）。教训：列表条目包装
+   "显示字段+数据字段"时，解包侧必须显式走数据字段——这种 bug 主机测不进 UI
+   循环就漏，靠真机崩溃才暴露。
+2. **书名回填（downloaded.lua `DL._backfill`）**：旧 spool（manifest 体系之前落的）
+   只有书号。browse 进入时若有书缺 manifest 且已登录：shelf 查书名（catalog 响应
+   已探明无书名字段，只有 bookId/chapters/synckey）+ 每本 catalog 拉目录 →
+   save_manifest。一次性（落盘后不再触发）；未登录/查不到名/失败 → 静默保留
+   书号显示，离线浏览不因此不可用。过程提示屏。部署后已在设备执行一轮：
+   5/5 全部拿到真实书名+完整目录（盲视33章/游隼8/我为什么写作16/安妮·卡森15/
+   写作与生活55）。
+3. **Log 埋点**：browse 进入书数、离线打开（book/ch）、回填逐本——真机留痕。
+4. `tests/downloaded_test.lua` 新建（8 断言）：_chapter_entries 包装形状 +
+   _backfill 筛选/查名/跳过/未登录四态。**套件隔离教训**：run.lua 单进程顺序跑，
+   桩替换必须先于 require（模块加载期捕获引用）、api 原地改写按函数粒度还原、
+   pcall 兜底保证还原必达——首次三桩泄漏连坐 sync/reader 两套件。
+
+### 验证
+
+- `lua5.1 tests/run.lua`：**23 套全绿**；luac 零错；部署后 SMOKE PASS EXIT=0。
+- 设备实证：backfill 5/5 书名+目录落盘；真实 spool 正文（36KB）过
+  Reader.layout 769 行无错（原崩溃点）。
+
+
 ### 账号状态 + UI 打磨（用户口径：在线/离线/扫码登录）
 
 **目标**：主菜单显示账号状态（在线/离线/未登录），提供扫码登录与显式检测入口；
