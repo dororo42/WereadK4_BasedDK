@@ -323,7 +323,7 @@ keys("Back")
 local ok, err = run_menu()
 check(ok, "主菜单应跑通，实得 " .. tostring(err))
 local txt = all_text()
-for _, name in ipairs({ "继续阅读", "书架", "已下载", "同步进度", "检查连接", "设置", "运行状态", "退出" }) do
+for _, name in ipairs({ "继续阅读", "书架", "已下载", "设置", "退出" }) do
     check(txt:find(name, 1, true) ~= nil, "首屏应列出「" .. name .. "」，实得 " .. txt:sub(1, 120))
 end
 check(txt:find("测试号", 1, true) ~= nil, "首屏应显示账号名")
@@ -343,7 +343,8 @@ check(txt:find("已登录", 1, true) == nil, "失效态不得再显示「已登�
 
 -- 1b) 检查连接入口：调 Auth.renew(true) 并如实回报结论
 reset_state()
-keys("Down", "Down", "Down", "Down", "Press")  -- 第 5 项 → 检查连接
+keys("Down", "Down", "Down", "Press",          -- 主菜单 → 设置
+     "Down", "Down", "Down", "Down", "Down", "Down", "Press")  -- 检查连接（可选项第 7 = Down×6）
 ok, err = run_menu()
 check(ok, "检查连接应跑通，实得 " .. tostring(err))
 check(all_text():find("正在检测连接", 1, true) ~= nil, "检测中应有过程提示")
@@ -352,8 +353,8 @@ check(all_text():find("检查连接: 状态未变（冷却中）", 1, true) ~= n
 
 -- 2) 设置 → 字体：face 打不开时不得写配置（坏路径会让下次翻页无声降级）
 reset_state()
-keys("Down", "Down", "Down", "Down", "Down", "Press", -- 主菜单 → 设置（第 6 项）
-     "Down", "Down", "Down", "Press",        -- 设置项 → 字体（第 4 项）
+keys("Down", "Down", "Down", "Press",         -- 主菜单 → 设置（第 4 项）
+     "Down", "Down", "Down", "Down", "Press", -- 设置 → 字体（第 5 项）
      "Press")                                -- 值选择 → 唯一候选
 font_fail[DEFAULT_FONT] = true
 ok, err = run_menu()
@@ -366,7 +367,7 @@ check(call_of("font_load") ~= nil, "选择时必须先在设备上开一次 face
 
 -- 3) 设置 → 字体：能打开则落盘，且菜单自身立即换面（这一屏就是预览）
 reset_state()
-keys("Down", "Down", "Down", "Down", "Down", "Press", "Down", "Down", "Down", "Press", "Press")
+keys("Down", "Down", "Down", "Press", "Down", "Down", "Down", "Down", "Press", "Press")
 ok, err = run_menu()
 check(ok, "字体切换应跑通，实得 " .. tostring(err))
 check(Config.load().font_path == DEFAULT_FONT,
@@ -382,8 +383,8 @@ check(after >= 2 and sizes:find("24", 1, true) and sizes:find("16", 1, true),
 -- 4) 设置 → 云端进度=关：阅读时一个云端请求都不发（说不同步就别联网）
 reset_state()
 reading_state()
-keys("Down", "Down", "Down", "Down", "Down", "Press", -- 设置（第 6 项）
-     "Down", "Down", "Press",                -- 云端进度（第 3 项）→ 值选择
+keys("Down", "Down", "Down", "Press",         -- 设置（第 4 项）
+     "Down", "Down", "Down", "Down", "Down", "Press", -- 云端进度（第 7 项）→ 值选择
      "Down", "Press",                        -- 关
      "Back", "Back",                          -- 提示屏 + 退出设置
      "Press")                                 -- 继续阅读（第 1 项）
@@ -445,7 +446,9 @@ reading_state()
 sync_remote_ret = { chapter_uid = "u1", percent = 5 }
 sync_target_ret = { chapter_idx = 10, pos = 1, fraction = 0.1, title = "第1章" }
 sync_side, sync_why = "local", "same"
-keys("Down", "Down", "Down", "Press")       -- 同步进度 = 第 4 项
+keys("Down", "Down", "Down", "Press",       -- 主菜单 → 设置（第 4 项）
+     "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Press",  -- 同步进度（可选项第 8 = Down×7）
+     "Back")                                 -- 返回设置 → 主菜单 Back 退出
 ok, err = run_menu()
 check(ok, "同步进度入口应跑通，实得 " .. tostring(err))
 check(count_of("sync_remote") == 1,
@@ -464,8 +467,9 @@ check(count_of("dl_browse") == 1, "中键已下载必须进 Downloaded.browse")
 
 -- 7c) 「运行状态」入口：状态屏（内存/堆/spool 占用/错误计数/app.log 尾部）
 reset_state()
-keys("Down", "Down", "Down", "Down", "Down", "Down", "Press", -- 第 7 项 → 运行状态
-     "Back")                                                    -- 任意键返回 → 主菜单 Back 退出
+keys("Down", "Down", "Down", "Press",         -- 主菜单 → 设置
+     "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Press", -- 运行状态（可选项第 9 = Down×8）
+     "Back", "Back")                            -- 状态屏任意键 → 设置返回 → 主菜单 Back 退出
 ok, err = run_menu()
 check(ok, "运行状态屏应跑通，实得 " .. tostring(err))
 txt = all_text()

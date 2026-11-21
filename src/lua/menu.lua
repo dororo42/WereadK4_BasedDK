@@ -24,21 +24,22 @@ local Fonts = require("fonts")
 
 
 -- 菜单项随登录态变化（shelf/阅读在登录后可用）
--- 登录态菜单：在线能力挂检查连接；凭据失效(离线·登录失效)时追加扫码登录——
+-- 主菜单收敛到五个入口（多看风的少而稳）：同步进度/检查连接/运行状态全部归入
+-- 设置屏（分组见 settings_screen）。凭据失效(离线·登录失效)时追加扫码登录——
 -- 只在用户显式选择时才出二维码（绝不自动扫码，风控约束）。
 local function build_items()
     local status = Auth.status()
     if Api.has_login() then
         local auth = Api.load_auth()
         local name = tostring(auth.account.name or auth.account.user_vid or "已登录")
-        local items = { "继续阅读", "书架", "已下载", "同步进度", "检查连接", "设置", "运行状态" }
+        local items = { "继续阅读", "书架", "已下载", "设置" }
         if status == "离线·登录失效" then
             items[#items + 1] = "扫码登录"
         end
         items[#items + 1] = "退出"
         return items, name, status
     end
-    return { "扫码登录", "书架(需登录)", "已下载", "设置", "运行状态", "退出" }, nil, status
+    return { "扫码登录", "书架(需登录)", "已下载", "设置", "退出" }, nil, status
 end
 
 local items, account_name, account_status = build_items()
@@ -325,13 +326,20 @@ local function cloud_position(book_id, chapters, cur_idx, page, force)
 end
 
 -- 运行状态屏（用户口径：测试 log 反映实际加载占用与错误）。
--- 内容：内存、Lua 堆、spool 占用、错误计数、app.log 尾部。任意键返回。
+-- 真机缺陷实证：app.log 行最长 114 字符，16px 字号 ≈1800px 远超 600px 屏宽——
+-- 长行直接画出右边缘是「显示不正常」的根因。修复=所有行统一按字符数裁剪
+-- （clip=utf8_substr，按最坏 CJK 全宽估），meminfo 不再抄原始行而是解析成一条。
 local function status_screen(ft_main, ft_small)
     local W, H = wr.fb_w(), wr.fb_h()
-    local mem = {}
+    local mem_total, mem_free = nil, nil
     local f = io.open("/proc/meminfo", "r")
     if f then
-        for i = 1, 3 do mem[#mem + 1] = f:read("*l") or "" end
+        for line in f:lines() do
+            local k, v = line:match("^(%w+):%s+(%d+)")
+            if k == "MemTotal" then mem_total = math.floor(tonumber(v) / 1024) end
+            if k == "MemFree" then mem_free = math.floor(tonumber(v) / 1024) end
+            if mem_total and mem_free then break end
+        end
         f:close()
     end
     local heap_kb = math.floor(collectgarbage("count"))
@@ -346,6 +354,7 @@ local function status_screen(ft_main, ft_small)
     wr.fb_fill(0, 0, W, H, 0x00)
     local y = 20
     local function row(s, small)
+        s = clip(s, small and 32 or 22)          -- 32×16px=512px < 600-24×2 ✓
         if small and ft_small then
             wr.fb_text_ft(ft_small, 24, y, s, 0x40)
         elseif ft_main then
@@ -357,17 +366,17 @@ local function status_screen(ft_main, ft_small)
     end
     row("运行状态", false)
     row("账号: " .. tostring(Auth.status()), true)
-    row(mem[1] or "", true)
-    row(mem[2] or "", true)
-    row(mem[3] or "", true)
+    if mem_total then
+        row(string.format("内存: 共 %d MB · 空闲 %d MB", mem_total, mem_free or 0), true)
+    end
     row(string.format("Lua heap: %d KB", heap_kb), true)
     row(string.format("已下载: %d 本 / %d 章 / %s",
         #books, chs_down,
         bytes >= 1024 * 1024 and string.format("%.1fMB", bytes / 1048576)
             or string.format("%dKB", math.floor(bytes / 1024))), true)
     row(string.format("错误: 本次进程 %d / 累计 %d", Log.errors, errs_total), true)
-    wr.fb_fill(16, y, W - 32, 2, 0xFF)
-    y = y + 10
+    wr.fb_fill(16, y, W - 32, 1, 0x40)
+    y = y + 12
     row("app.log 尾部:", true)
     for _, line in ipairs(Log.tail(8)) do
         row(line ~= "" and line or " ", true)
@@ -489,6 +498,191 @@ local function read_book(book_id, force_sync, title_hint)
     end
 end
 
+-- 「检查连接」显式探测：force 绕过 600s 冷却是用户显式动作；60s 防抖防连点。
+-- 只报结论不自动扫码——renew 失败 ≠ 该重扫（可能是无网/冷却）。
+local function check_connection()
+    local res, rerr
+    if os.time() - last_check_ts < 60 then
+        res = "debounced"
+        show("刚检查过: " .. Auth.status(), true)
+    else
+        Auth.clear_screen("正在检测连接…")
+        res, rerr = Auth.renew(true)
+        last_check_ts = os.time()
+        local msg = { replaced = "在线（会话已续期）", stale = "在线（凭据稍受限）",
+            expired = "离线：登录已失效（设置内可扫码重新登录）",
+            network = "离线：无网络连接", cooling = "状态未变（冷却中）",
+            ["no-refresh"] = "登录态缺少 refreshToken，建议扫码登录" }
+        show("检查连接: " .. (msg[res] or tostring(res)) ..
+            (msg[res] == nil and (" " .. tostring(rerr)) or ""), true)
+    end
+    Log.info(string.format("conn check: %s", tostring(res)))
+end
+
+-- 「同步进度」手动入口：对最近一本书强制拉一次云端位置并接着读（忽略设置开关）。
+local function sync_last_book()
+    local last = Progress.get_last()
+    if last then
+        assert(wr.fb_open(), "fb_open failed")
+        read_book(last, true, (Progress.get(last) or {}).title)
+    else
+        show("暂无阅读记录，无从同步")
+    end
+end
+
+-- 设置屏（分组）：阅读 / 账号 / 系统 三组，组间分组线（不可选行，导航跳过）。
+-- 主菜单的「同步进度/检查连接/运行状态」全部归入这里（多看风的少而稳）。
+local function settings_screen()
+    local SEP = { sep = true }
+    local font_opts = {}
+    for _, c in ipairs(Fonts.list()) do
+        font_opts[#font_opts + 1] = { label = c.label, v = c.path }
+    end
+    local entries = {
+        -- 阅读
+        { name = "字号", key = "font_size",
+          opts = { {label="16 pt",v=16},{label="18 pt",v=18},{label="20 pt",v=20},
+                   {label="22 pt",v=22},{label="24 pt",v=24},{label="26 pt",v=26},
+                   {label="28 pt",v=28},{label="30 pt",v=30} } },
+        { name = "行距", key = "line_factor",
+          opts = { {label="紧凑",v=1.3},{label="标准",v=1.54},{label="宽松",v=1.8} } },
+        { name = "左右边距", key = "margin_x",
+          opts = { {label="窄",v=20},{label="标准",v=30},{label="宽",v=40} } },
+        { name = "上下边距", key = "margin_top",
+          opts = { {label="紧",v=16},{label="标准",v=24},{label="松",v=32} } },
+        { name = "字体", key = "font_path", cur = Fonts.path, opts = font_opts,
+          apply = function(o)
+              -- 先在设备上开一次这个 face：文件在但 freetype 打不开（损坏、
+              -- 非字体、槽位耗尽）时必须拒绝，否则坏设置要到下次翻页才暴露。
+              local ft = Fonts.open(o.v, 30)
+              if not ft then
+                  return "字体打不开，未改设置: " .. clip(o.label, 10)
+              end
+              wr.font_close(ft)
+              Config.set("font_path", o.v)
+              -- 菜单自身立即换面（这一屏就是最好的预览）；阅读页在下次
+              -- Reader.open 时才取新句柄，所以正文要换章才见效。
+              wr.font_close(ft_main)
+              ft_main = Fonts.load(24)
+              if ft_small then wr.font_close(ft_small) end
+              ft_small = ft_main and Fonts.load(16) or nil
+              return "已切换字体: " .. clip(o.label, 10)
+          end },
+        SEP,
+        -- 账号
+        { name = "云端进度", key = "progress_sync",
+          opts = { {label="开",v=true},{label="关",v=false} } },
+        { name = "检查连接", action = check_connection },
+        { name = "同步进度", action = sync_last_book },
+        SEP,
+        -- 系统
+        { name = "运行状态", action = status_screen },
+    }
+
+    local sel_e, running2 = 1, true
+    local function current_of(e)
+        return tostring(e.cur and e.cur() or Config.load()[e.key])
+    end
+    -- 选中下标只落在可选行上（sep 不可停）
+    local function step_e(dir)
+        repeat
+            sel_e = sel_e + dir
+            if sel_e < 1 then sel_e = #entries end
+            if sel_e > #entries then sel_e = 1 end
+        until not entries[sel_e].sep
+    end
+
+    local function draw_set()
+        wr.fb_fill(0, 0, W, H, 0x00)
+        text(16, 14, "设置", 0xFF, ft_main)
+        wr.fb_fill(16, 14 + TITLE_H, W - 32, 1, 0x40)
+        for i, e in ipairs(entries) do
+            local y = Y0 + (i - 1) * ITEM_H
+            if e.sep then
+                wr.fb_fill(16, y + math.floor(ITEM_H / 2) - 1, W - 32, 1, 0x40)
+            else
+                local curv = current_of(e)
+                local label = e.name
+                for _, o in ipairs(e.opts or {}) do
+                    if tostring(o.v) == curv then label = label .. "（当前: " .. o.label .. "）" end
+                end
+                if i == sel_e then
+                    wr.fb_fill(12, y - 6, W - 24, ITEM_H - 6, 0xFF)
+                    text(22, y, label, 0x00, ft_main)
+                else
+                    text(22, y, label, 0xFF, ft_main)
+                end
+            end
+        end
+        if ft_small then
+            wr.fb_text_ft(ft_small, 16, H - 40, "上下移动 中键进入 返回", 0x60)
+        end
+        wr.fb_quant()
+        wr.fb_refresh(0)
+    end
+
+    draw_set()
+    while running2 do
+        local k = wr.input_poll(1000, true)
+        if k == "Up" then
+            step_e(-1); draw_set()
+        elseif k == "Down" then
+            step_e(1); draw_set()
+        elseif k == "Press" then
+            local e = entries[sel_e]
+            if e.action then
+                e.action()
+                draw_set()
+            else
+                -- 值选择屏（通用）
+                local curv = current_of(e)
+                local sel_v = 1
+                for i, o in ipairs(e.opts) do if tostring(o.v) == curv then sel_v = i end end
+                local function draw_vals()
+                    wr.fb_fill(0, 0, W, H, 0x00)
+                    text(16, 14, e.name, 0xFF, ft_main)
+                    wr.fb_fill(16, 14 + TITLE_H, W - 32, 1, 0x40)
+                    for i, o in ipairs(e.opts) do
+                        local y = Y0 + (i - 1) * ITEM_H
+                        if i == sel_v then
+                            wr.fb_fill(12, y - 6, W - 24, ITEM_H - 6, 0xFF)
+                            text(22, y, o.label, 0x00, ft_main)
+                        else
+                            text(22, y, o.label, 0xFF, ft_main)
+                        end
+                    end
+                    wr.fb_quant()
+                    wr.fb_refresh(0)
+                end
+                draw_vals()
+                local picking = true
+                while picking do
+                    local k2 = wr.input_poll(1000, true)
+                    if k2 == "Up" then
+                        sel_v = sel_v - 1; if sel_v < 1 then sel_v = #e.opts end; draw_vals()
+                    elseif k2 == "Down" then
+                        sel_v = sel_v + 1; if sel_v > #e.opts then sel_v = 1 end; draw_vals()
+                    elseif k2 == "Press" then
+                        local o = e.opts[sel_v]
+                        if e.apply then
+                            show(e.apply(o), true)
+                        else
+                            Config.set(e.key, o.v)
+                            show("已设置（下次阅读生效）", true)
+                        end
+                        picking = false
+                    elseif k2 == "Back" or k2 == "Menu" or k2 == "Home" then
+                        picking = false
+                    end
+                end
+                draw_set()
+            end
+        elseif k == "Back" or k == "Menu" or k == "Home" then
+            running2 = false
+        end
+    end
+end
+
 draw()
 
 -- SMOKE 像素自检（墨量极性：0x00=白底 / 0xFF=黑字）：字形区应有亮像素（>200）
@@ -539,34 +733,9 @@ if not SMOKE then
                 end
                 sel = 1
                 draw()
-            elseif items[sel] == "检查连接" then
-                -- 手动探测入口：force 绕过 600s 冷却是用户显式动作；60s 防抖防连点。
-                -- 只报结论不扫二维码——renew 失败 ≠ 该重扫（可能是无网/冷却）。
-                sel = 1
-                local res, rerr
-                if os.time() - last_check_ts < 60 then
-                    res = "debounced"
-                    show("刚检查过: " .. Auth.status(), true)
-                else
-                    Auth.clear_screen("正在检测连接…")
-                    res, rerr = Auth.renew(true)
-                    last_check_ts = os.time()
-                    local msg = { replaced = "在线（会话已续期）", stale = "在线（凭据稍受限）",
-                        expired = "离线：登录已失效（可扫码重新登录）",
-                        network = "离线：无网络连接", cooling = "状态未变（冷却中）",
-                        ["no-refresh"] = "登录态缺少 refreshToken，建议扫码登录" }
-                    show("检查连接: " .. (msg[res] or tostring(res)) ..
-                        (msg[res] == nil and (" " .. tostring(rerr)) or ""), true)
-                end
-                Log.info(string.format("conn check: %s", tostring(res)))
-                draw()
             elseif items[sel] == "已下载" then
                 sel = 1
                 Downloaded.browse()
-                draw()
-            elseif items[sel] == "运行状态" then
-                sel = 1
-                status_screen(ft_main, ft_small)
                 draw()
             elseif items[sel] == "书架" then
                 sel = 1
@@ -585,136 +754,9 @@ if not SMOKE then
                     show("暂无阅读记录")
                 end
                 draw()
-            elseif items[sel] == "同步进度" then
-                -- 手动入口：对最近一本书强制拉一次云端位置并接着读（忽略设置里的开关）。
-                -- 上报方向不需要手动：每离开一章 Report.send 已经发过一次。
-                local last = Progress.get_last()
-                if last then
-                    assert(wr.fb_open(), "fb_open failed")
-                    read_book(last, true, (Progress.get(last) or {}).title)
-                else
-                    show("暂无阅读记录，无从同步")
-                end
-                draw()
             elseif items[sel] == "设置" then
-                -- 设置主屏：字号 / 行距 / 云端进度 / 字体（共用值选择器，落 config.json）
-                local font_opts = {}
-                for _, c in ipairs(Fonts.list()) do
-                    font_opts[#font_opts + 1] = { label = c.label, v = c.path }
-                end
-                local entries = {
-                    { key = "font_size",   name = "字号",
-                      opts = { {label="16 pt",v=16},{label="18 pt",v=18},{label="20 pt",v=20},
-                               {label="22 pt",v=22},{label="24 pt",v=24},{label="26 pt",v=26},
-                               {label="28 pt",v=28},{label="30 pt",v=30} } },
-                    { key = "line_factor", name = "行距",
-                      opts = { {label="紧凑",v=1.3},{label="标准",v=1.54},{label="宽松",v=1.8} } },
-                    { key = "progress_sync", name = "云端进度",
-                      opts = { {label="开",v=true},{label="关",v=false} } },
-                    { key = "font_path", name = "字体", cur = Fonts.path, opts = font_opts,
-                      apply = function(o)
-                          -- 先在设备上开一次这个 face：文件在但 freetype 打不开（损坏、
-                          -- 非字体、槽位耗尽）时必须拒绝，否则坏设置要到下次翻页才暴露。
-                          local ft = Fonts.open(o.v, 30)
-                          if not ft then
-                              return "字体打不开，未改设置: " .. clip(o.label, 10)
-                          end
-                          wr.font_close(ft)
-                          Config.set("font_path", o.v)
-                          -- 菜单自身立即换面（这一屏就是最好的预览）；阅读页在下次
-                          -- Reader.open 时才取新句柄，所以正文要换章才见效。
-                          wr.font_close(ft_main)
-                          ft_main = Fonts.load(24)
-                          if ft_small then wr.font_close(ft_small) end
-                          ft_small = ft_main and Fonts.load(16) or nil
-                          return "已切换字体: " .. clip(o.label, 10)
-                      end },
-                }
-                -- 当前值一律按字符串比：字号/行距是数字，字体是路径，两套比较没必要。
-                local function current_of(e)
-                    return tostring(e.cur and e.cur() or Config.load()[e.key])
-                end
-                local sel_e, running2 = 1, true
-                local function draw_set()
-                    wr.fb_fill(0, 0, W, H, 0x00)
-                    text(16, 14, "设置", 0xFF, ft_main)
-                    wr.fb_fill(16, 14 + TITLE_H, W - 32, 2, 0xFF)
-                    for i, e in ipairs(entries) do
-                        local y = Y0 + (i - 1) * ITEM_H
-                        local curv = current_of(e)
-                        local label = e.name
-                        for _, o in ipairs(e.opts) do
-                            if tostring(o.v) == curv then label = label .. "（当前: " .. o.label .. "）" end
-                        end
-                        if i == sel_e then
-                            wr.fb_fill(12, y - 6, W - 24, ITEM_H - 6, 0xFF)
-                            text(22, y, label, 0x00, ft_main)
-                        else
-                            text(22, y, label, 0xFF, ft_main)
-                        end
-                    end
-                    if ft_small then
-                        wr.fb_text_ft(ft_small, 16, H - 40, "上下移动 中键进入 返回", 0x60)
-                    end
-                    wr.fb_quant()
-                    wr.fb_refresh(0)
-                end
-                draw_set()
-                while running2 do
-                    local k = wr.input_poll(1000, true)
-                    if k == "Up" then
-                        sel_e = sel_e - 1; if sel_e < 1 then sel_e = #entries end; draw_set()
-                    elseif k == "Down" then
-                        sel_e = sel_e + 1; if sel_e > #entries then sel_e = 1 end; draw_set()
-                    elseif k == "Press" then
-                        -- 值选择屏（通用）
-                        local e = entries[sel_e]
-                        local curv = current_of(e)
-                        local sel_v = 1
-                        for i, o in ipairs(e.opts) do if tostring(o.v) == curv then sel_v = i end end
-                        local function draw_vals()
-                            wr.fb_fill(0, 0, W, H, 0x00)
-                            text(16, 14, e.name, 0xFF, ft_main)
-                            wr.fb_fill(16, 14 + TITLE_H, W - 32, 2, 0xFF)
-                            for i, o in ipairs(e.opts) do
-                                local y = Y0 + (i - 1) * ITEM_H
-                                if i == sel_v then
-                                    wr.fb_fill(12, y - 6, W - 24, ITEM_H - 6, 0xFF)
-                                    text(22, y, o.label, 0x00, ft_main)
-                                else
-                                    text(22, y, o.label, 0xFF, ft_main)
-                                end
-                            end
-                            wr.fb_quant()
-                            wr.fb_refresh(0)
-                        end
-                        draw_vals()
-                        local picking = true
-                        while picking do
-                            local k2 = wr.input_poll(1000, true)
-                            if k2 == "Up" then
-                                sel_v = sel_v - 1; if sel_v < 1 then sel_v = #e.opts end; draw_vals()
-                            elseif k2 == "Down" then
-                                sel_v = sel_v + 1; if sel_v > #e.opts then sel_v = 1 end; draw_vals()
-                            elseif k2 == "Press" then
-                                local o = e.opts[sel_v]
-                                if e.apply then
-                                    show(e.apply(o), true)
-                                else
-                                    Config.set(e.key, o.v)
-                                    show("已设置（下次阅读生效）", true)
-                                end
-                                picking = false
-                            elseif k2 == "Back" or k2 == "Menu" or k2 == "Home" then
-                                picking = false
-                            end
-                        end
-                        draw_set()
-                    elseif k == "Back" or k == "Menu" or k == "Home" then
-                        running2 = false
-                    end
-                end
                 sel = 1
+                settings_screen()
                 draw()
             else
                 show("已选择: " .. items[sel])

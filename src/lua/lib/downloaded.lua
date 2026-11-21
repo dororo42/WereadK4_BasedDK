@@ -93,6 +93,41 @@ local function fmt_bytes(b)
     return string.format("%dKB", math.floor(b / 1024))
 end
 
+-- 确认屏（删除等破坏性操作统一走这里）：中键确认，Back 取消。
+local function confirm(ft_main, ft_small, title, msg)
+    local y = 200
+    wr.fb_fill(0, 0, wr.fb_w(), wr.fb_h(), 0x00)
+    ft_text(ft_main, 16, 14, title, 0xFF)
+    wr.fb_fill(16, 14 + 40, wr.fb_w() - 32, 2, 0xFF)
+    ft_text(ft_main, 24, y, msg, 0xFF)
+    if ft_small then
+        wr.fb_text_ft(ft_small, 24, y + 60, "中键确认删除 · Back 取消", 0x60)
+    end
+    wr.fb_quant()
+    wr.fb_refresh(0)
+    while true do
+        local key = wr.input_poll(1000, true)
+        if key == "Press" then return true end
+        if key == "Back" or key == "Menu" or key == "Home" then return false end
+    end
+end
+
+-- 删除后提示（1.2s 停留）
+local function toast(ft_main, ft_small, msg)
+    wr.fb_fill(0, 0, wr.fb_w(), wr.fb_h(), 0x00)
+    ft_text(ft_main, 24, 200, msg, 0xFF)
+    if ft_small then
+        wr.fb_text_ft(ft_small, 24, 260, "任意键返回", 0x60)
+    end
+    wr.fb_quant()
+    wr.fb_refresh(0)
+    local t0 = wr.millis()
+    while wr.millis() - t0 < 1200 do
+        local key = wr.input_poll(0, true)
+        if key then return end
+    end
+end
+
 -- 章条目构造（纯函数，主机可测）：list_loop 需要 label，阅读需要原章数据——
 -- 两者都挂在同一包装表上，取章数据必须走 .chapter（曾因直取包装表把 nil text
 -- 传进 Reader.open 崩掉整个应用：reader.lua layout 对 nil gsub）。
@@ -154,53 +189,71 @@ function DL.browse()
             all = Download.list_books()      -- 回填成功 → 标题/章数立即生效
         end
     end
-    if #all == 0 and ft_main then
-        wr.fb_fill(0, 0, wr.fb_w(), wr.fb_h(), 0x00)
-        ft_text(ft_main, 40, 200, "暂无下载内容", 0xFF)
-        wr.fb_quant()
-        wr.fb_refresh(0)
-        local t0 = wr.millis()
-        while wr.millis() - t0 < 1500 do end
-        if ft_main then wr.font_close(ft_main) end
-        if ft_small then wr.font_close(ft_small) end
-        return
-    end
-
     Log.info(string.format("downloaded browse: %d books", #all))
-    -- 层 1：书目（label = 标题 + 已下载章数/大小）
-    local book_entries = {}
-    for _, b in ipairs(all) do
-        book_entries[#book_entries + 1] = {
-            label = string.format("%s（%d章 %s）", b.title, b.chapters_down, fmt_bytes(b.bytes)),
-            bookId = b.bookId,
-            title = b.title,
-        }
-    end
+
+    -- 结构：书目层（可重扫）→ 章层（可重扫）。任何删除动作后回上一层并重新
+    -- list_books——列表不是一次构造的快照，删除后空目录/空书自然消失。
     while true do
+        if #all == 0 then
+            wr.fb_fill(0, 0, wr.fb_w(), wr.fb_h(), 0x00)
+            ft_text(ft_main, 40, 200, "暂无下载内容", 0xFF)
+            wr.fb_quant()
+            wr.fb_refresh(0)
+            local t0 = wr.millis()
+            while wr.millis() - t0 < 1200 do end
+            break
+        end
+
+        -- 层 1：书目（label = 标题 + 已下载章数/大小）+ 批量删除动作行
+        local book_entries = {}
+        for _, b in ipairs(all) do
+            book_entries[#book_entries + 1] = {
+                label = string.format("%s（%d章 %s）", b.title, b.chapters_down, fmt_bytes(b.bytes)),
+                bookId = b.bookId,
+                title = b.title,
+            }
+        end
+        book_entries[#book_entries + 1] = { label = "─ 批量删除（清空已下载）", action = "del_all" }
         local pick = list_loop(ft_main, ft_small, book_entries, "已下载书目")
         if not pick then break end
         local book = book_entries[pick]
 
-        -- 层 2：该书已下载章节
-        local chs = Download.list_downloaded_chapters(book.bookId)
-        if #chs == 0 and ft_main then
-            ft_text(ft_main, 40, 200, "该书无已下载章节", 0xFF)
-            wr.fb_quant(); wr.fb_refresh(0)
-            local t0 = wr.millis()
-            while wr.millis() - t0 < 1200 do end
+        if book.action == "del_all" then
+            if confirm(ft_main, ft_small, "批量删除",
+                "清空全部已下载内容（共 " .. #all .. " 本）？") then
+                Download.delete_all()
+                toast(ft_main, ft_small, "已清空全部下载")
+            end
+            all = Download.list_books()      -- 重扫（可能已空）
         else
-            local ch_entries = DL._chapter_entries(chs)
-            local sel_ch = list_loop(ft_main, ft_small, ch_entries,
-                book.title .. " · 已下载 " .. #chs .. " 章")
-            if sel_ch then
-                local c = ch_entries[sel_ch].chapter
-                local rec = Progress.get(book.bookId)
-                local page = (rec and rec.chapter_idx == c.chapterIdx and rec.page) or 1
-                Log.info(string.format("offline open: %s ch%d", book.bookId, c.chapterIdx))
-                Reader.open(c.text, c.title, page)
+            -- 层 2：该书已下载章节 + 删除本书动作行
+            local chs = Download.list_downloaded_chapters(book.bookId)
+            if #chs == 0 then
+                toast(ft_main, ft_small, "该书无已下载章节")
+            else
+                local ch_entries = DL._chapter_entries(chs)
+                ch_entries[#ch_entries + 1] = { label = "─ 删除本书下载", action = "del_book" }
+                local sel_ch = list_loop(ft_main, ft_small, ch_entries,
+                    book.title .. " · 已下载 " .. #chs .. " 章")
+                if sel_ch then
+                    local entry = ch_entries[sel_ch]
+                    if entry.action == "del_book" then
+                        if confirm(ft_main, ft_small, "删除本书",
+                            "删除《" .. tostring(book.title) .. "》全部下载内容？") then
+                            Download.delete_book(book.bookId)
+                            toast(ft_main, ft_small, "已删除本书")
+                        end
+                        all = Download.list_books()   -- 重扫书目
+                    else
+                        local c = entry.chapter
+                        local rec = Progress.get(book.bookId)
+                        local page = (rec and rec.chapter_idx == c.chapterIdx and rec.page) or 1
+                        Log.info(string.format("offline open: %s ch%d", book.bookId, c.chapterIdx))
+                        Reader.open(c.text, c.title, page)
+                    end
+                end
             end
         end
-        -- 回书目层（重画由 list_loop 的 draw 完成）
     end
 
     if ft_main then wr.font_close(ft_main) end

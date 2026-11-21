@@ -83,6 +83,19 @@ books = Download.list_books()
 check(books[1].bookId == "30303", "最近下载的应排最前，实得 " .. tostring(books[1].bookId))
 check(books[#books].bookId == "999", "无 manifest（last_download=0）排末尾")
 
+-- 7) 删除原语：单章/整书/全部（守卫 + 文件真删）
+check(Download.delete_chapter("10101", 3), "删除已有章应成功")
+check(#Download.list_downloaded_chapters("10101") == 1, "删后余 1 章")
+check(Download.delete_chapter("10101", 3) == false, "重复删不存在的章应拒绝")
+check(Download.delete_book("10101"), "删除整书应成功")
+check(Download.delete_book("not-a-number") == false, "非数字 id 必须拒绝（路径守卫）")
+local gone = io.open(DIR .. "/10101/manifest.json")
+check(gone == nil, "整书删除后目录应消失")
+
+local ok_all = Download.delete_all()
+check(ok_all ~= false, "清空全部应执行")
+check(#Download.list_books() == 0, "清空后清单应为空")
+
 os.execute("rm -rf '" .. DIR .. "'")
 print("download_list_test done: " .. (fails == 0 and "ALL PASS" or "FAILS=" .. fails) .. " (fails=" .. fails .. ")")
 return fails

@@ -36,8 +36,18 @@ local function line_h(fs)
     local factor = tonumber(Config.load().line_factor) or 1.54
     return math.floor(fs * factor + 0.5)
 end
-local MARGIN_X = 30
-local MARGIN_TOP = 24
+-- 边距（设置屏「左右边距/上下边距」，config.json 的 margin_x/margin_top）。
+-- 底边距固定 44：那是页脚区，正文底边距随页脚高度。
+local function margin_x()
+    local v = tonumber(Config.load().margin_x)
+    if not v or v < 12 or v > 80 then return 30 end
+    return v
+end
+local function margin_top()
+    local v = tonumber(Config.load().margin_top)
+    if not v or v < 8 or v > 60 then return 24 end
+    return v
+end
 local MARGIN_BOTTOM = 44          -- 页脚区（16px 点阵页脚，正文区比旧 56 多 12px/屏）
 
 -- 键位表：一处声明，dispatch 只做查表（改键位不动控制流）。
@@ -132,9 +142,9 @@ function Reader.open(chapter_text, chapter_title, start_page)
     end
 
     local W, H = wr.fb_w(), wr.fb_h()
-    local maxw = W - MARGIN_X * 2
+    local maxw = W - margin_x() * 2
     local rows = Reader.layout(ft, maxw, chapter_text)
-    local rows_per_page = math.floor((H - MARGIN_TOP - MARGIN_BOTTOM) / lh)
+    local rows_per_page = math.floor((H - margin_top() - MARGIN_BOTTOM) / lh)
     local total_pages = math.max(1, math.ceil(#rows / rows_per_page))
     local page
     if type(start_page) == "table" then
@@ -149,11 +159,11 @@ function Reader.open(chapter_text, chapter_title, start_page)
     local function draw()
         wr.fb_fill(0, 0, W, H, 0x00)
         local first = (page - 1) * rows_per_page
-        local y = MARGIN_TOP
+        local y = margin_top()
         for i = first + 1, math.min(first + rows_per_page, #rows) do
             local row = rows[i]
             if row ~= "" then
-                wr.fb_text_ft(ft, MARGIN_X, y, row, 0xFF)
+                wr.fb_text_ft(ft, margin_x(), y, row, 0xFF)
             end
             y = y + lh
         end

@@ -374,6 +374,33 @@ function Download.list_downloaded_chapters(book_id)
     return out
 end
 
+------------------------------------------------------------------ 删除（已下载管理）
+
+-- 删除单章 spool 文件（manifest 不动：章数口径不变，下次浏览该章显示未下载）。
+function Download.delete_chapter(book_id, chapter_idx)
+    if not Download.is_spooled(book_id, chapter_idx) then return false end
+    os.execute("rm -f '" .. spool_path(book_id, chapter_idx) .. "'")
+    Log.info(string.format("delete chapter: %s ch%d", tostring(book_id), chapter_idx))
+    return true
+end
+
+-- 删除整书（spool + manifest）。bookId 来自 list_books 扫描（纯数字），仍加守卫
+-- 防御未来调用面变化；路径拼进 shell 前必须过这个检查。
+function Download.delete_book(book_id)
+    local id = tostring(book_id)
+    if not id:match("^%d+$") then return false, "bad book id" end
+    os.execute("rm -rf '" .. Download.SPOOL .. "/" .. id .. "'")
+    Log.info("delete book: " .. id)
+    return true
+end
+
+-- 清空全部已下载（含 manifest；下次进「已下载」在线时回填会重建书目信息）。
+function Download.delete_all()
+    os.execute("rm -rf '" .. Download.SPOOL .. "'/*")
+    Log.info("delete all downloads")
+    return true
+end
+
 ------------------------------------------------------------------ 按需取章
 
 -- 会话参数：psvts 是单书生命周期内有效的会话参数，每本书只抽一次（换书必须重抽）。
