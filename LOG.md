@@ -1,5 +1,38 @@
 # LOG — 动作日志（ub-mode）
 
+### 整本 epub 导出实施（用户口径「实施」，push 已批随本批）
+
+**架构**：C 层 `wr.zip_write`（store 型最小 zip 写入器：CRC32+local/central/EOCD，
+mimetype 强制首条未压缩=epub 规范；entry≤4096/载荷≤64MB 防 OOM）+ Lua
+`lib/epub.lua` 组装器（container/opf[EPUB3 metadata+manifest+spine]/nav.xhtml/
+toc.ncx/style.css/章 xhtml/图片重写 src→images/）+ `save_raw/read_raw`
+（解码后原始 xhtml 按 uid 落盘 books/<id>/xhtml/，txt 书 raw=同文本）+
+downloaded UI「导出整本 epub」动作行（在线补齐缺 xhtml 章→组装→toast）。
+
+**实现陷阱实录**：
+1. zip 字段偏移：初版按错误心智模型写（local 应 crc@14/csize@18/usize@22/
+   nlen@26；central 应 crc@16/csize@20/usize@24/nlen@28/**local_off@42**——
+   首轮写到 40=external attrs，local_off 全 0 致 python zipfile 拒读；
+   EOCD comment@20 是 16 位）。**两轮 field-offset bug 都是「规范偏移表未对表」**
+   ——以后写二进制格式必须先抄规范偏移表再落码。
+2. lua_next 迭代：**增量必须 lua_pop(L,1)**（保 key 供下代），写成 pop(2) =
+   栈底错位 → "invalid key to next"；且迭代中 lua_tostring 会原地改数字键类型
+   ——最终方案=单次迭代全量快照拷贝 malloc 数组，写盘阶段零 lua_next。
+3. 手写二进制格式的校验必须「本机手工解析字节」而不是只看设备端 PK 头
+   （设备端 head check 只看 4 字节，python zipfile 拒读才是真验收）。
+4. qemu 复现路径：k4-sysroot 的 ld-2.12.1.so 是悬空软链，qemu 不可用——
+   设备上 fprintf 调试更快。
+
+**设备 E2E**：埃塞克斯的鹰（8 章）在线补 xhtml→导出 391KB→本机 python
+zipfile 逐项检验：mimetype 首条未压缩 ✓/container ✓/opf manifest17+spine8 ✓/
+chapters 8 ✓/images 1（note.png）/nav+ncx+css ✓/**无 encryption/DRM** ✓/
+章节明文可读 ✓/**CRC 全包 PASS** ✓。合规度与插件生成物同基准。
+
+**测试**：epub_test 新建（escape/text_to_xhtml/collect_images/opf/nav/ncx
+8 断言），24 套全绿。**桩隔离教训再现**：epub_test 忘还原 package.loaded 连坐
+sync_test——downloaded_test 同款 restore 模式套用。
+
+
 ### 整本 epub 完整性/加密核实（用户口径，纯取证零代码改动）+ push（d477149..d901da0 共 7 提交）
 
 **证据**：设备上插件（weread_K4 v9.12）生成的真实整本 epub

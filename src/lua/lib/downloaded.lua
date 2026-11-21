@@ -10,6 +10,7 @@
 local Api = require("api")
 local Auth = require("auth")
 local Log = require("log")
+local Epub = require("epub")
 local Download = require("download")
 local Fonts = require("fonts")
 local Progress = require("progress")
@@ -174,6 +175,48 @@ function DL._backfill(all, notify)
     return done
 end
 
+-- 整本 epub 导出：在线补齐缺 xhtml 的章（复用 ensure_chapter 的抓取与资产
+-- 路径），然后组装。进度屏 3s 限流 + Back 取消（下载屏同款交互）。
+function DL._export_book(book, chs, ft_main, ft_small)
+    local manifest = Download.load_manifest(book.bookId)
+    local chapters = manifest and manifest.chapters or chs
+    local title = (manifest and manifest.title) or book.title
+    if not chapters or #chapters == 0 then
+        toast(ft_main, ft_small, "无章节数据，无法导出")
+        return nil, "no chapters"
+    end
+    Auth.clear_screen("正在导出 epub（0/" .. #chapters .. "）…")
+    local sess = Download.new_session()
+    local last_shown = 0
+    local ok, err = pcall(function()
+        for i, ch in ipairs(chapters) do
+            -- 取消：网络往返间隙 poll(0)
+            local k = wr.input_poll(0, true)
+            if k == "Back" then error({ cancelled = true }) end
+            if not Download.read_raw(book.bookId, ch.chapterUid) then
+                Download.ensure_chapter(book.bookId, chapters, ch.chapterIdx, sess)
+            end
+            local now = wr.millis()
+            if now - last_shown >= 3000 or i == #chapters then
+                last_shown = now
+                Auth.clear_screen(string.format("正在导出 epub（%d/%d）…", i, #chapters))
+            end
+        end
+    end)
+    if not ok and type(err) == "table" and err.cancelled then
+        toast(ft_main, ft_small, "已取消导出")
+        return nil, "cancelled"
+    end
+    local path, xerr = Epub.export(book.bookId, chapters, title,
+        (manifest and manifest.author) or "", nil)
+    if not path then
+        toast(ft_main, ft_small, "导出失败: " .. tostring(xerr):sub(1, 30))
+        Log.error("epub export " .. book.bookId .. ": " .. tostring(xerr))
+        return nil, xerr
+    end
+    return path
+end
+
 -- 入口：已下载书目 → 章 → 阅读。需 fb/input 已开（menu 级联共享）。
 -- 返回 nil（Back 层层退出）。
 function DL.browse()
@@ -232,12 +275,20 @@ function DL.browse()
                 toast(ft_main, ft_small, "该书无已下载章节")
             else
                 local ch_entries = DL._chapter_entries(chs)
+                ch_entries[#ch_entries + 1] = { label = "─ 导出整本 epub", action = "export" }
                 ch_entries[#ch_entries + 1] = { label = "─ 删除本书下载", action = "del_book" }
                 local sel_ch = list_loop(ft_main, ft_small, ch_entries,
                     book.title .. " · 已下载 " .. #chs .. " 章")
                 if sel_ch then
                     local entry = ch_entries[sel_ch]
-                    if entry.action == "del_book" then
+                    if entry.action == "export" then
+                        local path = DL._export_book(book, chs, ft_main, ft_small)
+                        if path then
+                            toast(ft_main, ft_small, "已导出: " .. tostring(path):match("([^/]+)$"))
+                        elseif path == nil then
+                            -- err 由 _export_book 内部展示过
+                        end
+                    elseif entry.action == "del_book" then
                         if confirm(ft_main, ft_small, "删除本书",
                             "删除《" .. tostring(book.title) .. "》全部下载内容？") then
                             Download.delete_book(book.bookId)

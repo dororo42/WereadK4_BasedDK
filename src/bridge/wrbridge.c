@@ -307,6 +307,178 @@ static int l_image_scale(lua_State *L)
     return 1;
 }
 
+/* ---- zip（epub 导出）----
+ * 最小 store 型 zip 写入器：CRC32 + local header（顺序落盘）+ central
+ * directory（内存攒齐）+ EOCD。epub 规范要求 mimetype 首条——全 store
+ * 不压缩天然满足。entry≤4096、总载荷≤64MB（防 OOM）。
+ * mimetype 提前由两遍扫描实现（pass0 只处理 mimetype）。 */
+
+static uint32_t wr_crc32(const uint8_t *data, size_t len)
+{
+    static uint32_t table[256];
+    static int table_ready;
+    if (!table_ready) {
+        for (uint32_t i = 0; i < 256; i++) {
+            uint32_t c = i;
+            for (int k = 0; k < 8; k++)
+                c = (c & 1) ? 0xEDB88320u ^ (c >> 1) : c >> 1;
+            table[i] = c;
+        }
+        table_ready = 1;
+    }
+    uint32_t crc = 0xFFFFFFFFu;
+    for (size_t i = 0; i < len; i++)
+        crc = table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
+    return crc ^ 0xFFFFFFFFu;
+}
+
+static void wr_zip_le32(uint8_t *p, uint32_t v)
+{
+    p[0] = v & 0xFF; p[1] = (v >> 8) & 0xFF; p[2] = (v >> 16) & 0xFF; p[3] = (v >> 24) & 0xFF;
+}
+
+static void wr_zip_le16(uint8_t *p, uint16_t v)
+{
+    p[0] = v & 0xFF; p[1] = (v >> 8) & 0xFF;
+}
+
+struct wr_zip_cd {
+    uint32_t crc, csize, offset;
+};
+
+/* zip_write(path, tbl)：tbl = { [name]=data, ... }。true | nil, err。
+ * 实现口径：先把 (name,data) 全量快照拷进 malloc 数组再写——lua_next 迭代
+ * 中途用 lua_tostring 会原地改键类型（数字键变字符串键），续代直接
+ * "invalid key to 'next'"（真机实证）。快照后无 lua_next，顺序确定。 */
+static int l_zip_write(lua_State *L)
+{
+    const char *path = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+
+    int n = 0, cap = 64;
+    struct wr_zip_cd *cds = (struct wr_zip_cd *)malloc(cap * sizeof(*cds));
+    char **names = (char **)malloc(cap * sizeof(*names));
+    char **datas = (char **)malloc(cap * sizeof(*datas));
+    uint32_t *dlen_v = (uint32_t *)malloc(cap * sizeof(*dlen_v));
+    size_t payload = 0, cd_len = 0, cd_cap = 0;
+    uint8_t *cd_buf = NULL;
+    const char *fail = NULL;
+
+    if (!cds || !names || !datas || !dlen_v) fail = "oom";
+
+    /* 快照（单次 lua_next；字符串立即拷贝，栈不再参与后续流程） */
+    for (lua_pushnil(L); lua_next(L, 2) && !fail; lua_pop(L, 1)) {
+        const char *name = lua_tostring(L, -2);
+        const char *data = lua_tostring(L, -1);
+        size_t nlen = name ? strlen(name) : 0;
+        size_t dlen = 0;
+        if (data) dlen = lua_objlen(L, -1);
+        if (!name || !data) {
+            fail = "zip entries must be string=string";
+        } else if (n == cap) {
+            cap *= 2;
+            cds = (struct wr_zip_cd *)realloc(cds, cap * sizeof(*cds));
+            names = (char **)realloc(names, cap * sizeof(*names));
+            datas = (char **)realloc(datas, cap * sizeof(*datas));
+            dlen_v = (uint32_t *)realloc(dlen_v, cap * sizeof(*dlen_v));
+            if (!cds || !names || !datas || !dlen_v) fail = "oom";
+        }
+        if (!fail && (nlen >= 256 || n > 4096 || payload + dlen > ((size_t)64 << 20))) {
+            fail = "zip limits exceeded";
+        }
+        if (!fail) {
+            names[n] = (char *)malloc(nlen + 1);
+            datas[n] = (char *)malloc(dlen + 1);
+            if (!names[n] || !datas[n]) { fail = "oom"; }
+            else {
+                memcpy(names[n], name, nlen + 1);
+                memcpy(datas[n], data, dlen);
+                dlen_v[n] = (uint32_t)dlen;
+                n++;
+                payload += dlen;
+            }
+        }
+    }
+    lua_pop(L, 1);   /* 收尾 lua_next 留下的 key（fail-break 时已多 pop 一层则再补） */
+
+    /* mimetype 提到首位（epub 规范：首条且未压缩） */
+    for (int i = 1; i < n && !fail; i++) {
+        if (strcmp(names[i], "mimetype") == 0) {
+            char *tn = names[0]; char *td = datas[0]; uint32_t tl = dlen_v[0];
+            names[0] = names[i]; datas[0] = datas[i]; dlen_v[0] = dlen_v[i];
+            names[i] = tn; datas[i] = td; dlen_v[i] = tl;
+            break;
+        }
+    }
+
+    FILE *f = fopen(path, "wb");
+    if (!f) fail = "open zip failed";
+    if (!fail && n == 0) fail = "empty zip";
+
+    if (!fail) {
+        for (int i = 0; i < n; i++) {
+            size_t nlen = strlen(names[i]);
+            uint32_t crc = wr_crc32((const uint8_t *)datas[i], dlen_v[i]);
+            long offset = ftell(f);
+            uint8_t lfh[30] = {0};
+            wr_zip_le32(lfh + 0, 0x04034b50u);
+            wr_zip_le16(lfh + 4, 20);
+            wr_zip_le16(lfh + 6, 0);
+            wr_zip_le16(lfh + 8, 0);                     /* method = store */
+            wr_zip_le32(lfh + 14, crc);
+            wr_zip_le32(lfh + 18, dlen_v[i]);
+            wr_zip_le32(lfh + 22, dlen_v[i]);
+            wr_zip_le16(lfh + 26, (uint16_t)nlen);
+            fwrite(lfh, 1, 30, f);
+            fwrite(names[i], 1, nlen, f);
+            fwrite(datas[i], 1, dlen_v[i], f);
+
+            size_t need = cd_len + 46 + nlen;
+            if (need > cd_cap) {
+                cd_cap = need * 2 + 256;
+                cd_buf = (uint8_t *)realloc(cd_buf, cd_cap);
+                if (!cd_buf) { fail = "oom"; break; }
+            }
+            uint8_t *c = cd_buf + cd_len;
+            memset(c, 0, 46);
+            wr_zip_le32(c + 0, 0x02014b50u);
+            wr_zip_le16(c + 4, 20); wr_zip_le16(c + 6, 20);
+            wr_zip_le32(c + 16, crc);
+            wr_zip_le32(c + 20, dlen_v[i]);
+            wr_zip_le32(c + 24, dlen_v[i]);
+            wr_zip_le16(c + 28, (uint16_t)nlen);
+            wr_zip_le32(c + 42, (uint32_t)offset);   /* local header offset @42 */
+            wr_zip_le32(c + 36, 0);                  /* external attrs @36..41 */
+
+            memcpy(c + 46, names[i], nlen);
+            cd_len += 46 + nlen;
+            (void)crc;
+        }
+    }
+    if (!fail) {
+        long cd_offset = ftell(f);
+        fwrite(cd_buf, 1, cd_len, f);
+        uint8_t eocd[22] = {0};
+        wr_zip_le32(eocd + 0, 0x06054b50u);
+        wr_zip_le16(eocd + 8, (uint16_t)n);
+        wr_zip_le16(eocd + 10, (uint16_t)n);
+        wr_zip_le32(eocd + 12, (uint32_t)cd_len);
+        wr_zip_le32(eocd + 16, (uint32_t)cd_offset);
+        fwrite(eocd, 1, 22, f);
+        if (ferror(f)) fail = "write failed";
+    }
+    if (f) fclose(f);
+    for (int i = 0; i < n; i++) { free(names[i]); free(datas[i]); }
+    free(names); free(datas); free(dlen_v); free(cds); free(cd_buf);
+    if (fail) {
+        remove(path);
+        lua_pushnil(L); lua_pushstring(L, fail);
+        return 2;
+    }
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
 /* ---- misc ---- */
 
 static int l_millis(lua_State *L)
@@ -330,6 +502,7 @@ static const luaL_Reg wr_funcs[] = {
     { "fb_image",    l_fb_image    },
     { "image_decode", l_image_decode },
     { "image_scale",  l_image_scale  },
+    { "zip_write",    l_zip_write    },
     { "font_load",   l_font_load   },
     { "font_close",  l_font_close  },
     { "fb_text_ft",  l_fb_text_ft  },

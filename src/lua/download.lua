@@ -168,7 +168,7 @@ function Download.fetch_chapter_text(book_id, chapter_uid, psvts)
                 return nil, "正文为空（会话续期: " .. tostring(renew_status) .. "）"
             end
         end
-        return text, err
+        return text, err, text     -- txt 书：raw=同文本（无 xhtml 结构）
     end
 
     -- epub 书：e_0 是可解码的 xhtml 分片（>32 字节）+ e_1/e_3 可选；
@@ -186,9 +186,10 @@ function Download.fetch_chapter_text(book_id, chapter_uid, psvts)
             return nil, "shard decode: " .. tostring(decoded)
         end
 
+        Download.save_raw(book_id, chapter_uid, decoded)
         local text = HtmlText.to_text(decoded)
         if text == "" then
-            -- 纯图片/封面页：剥标签后无文本
+            -- 纯图片/封面页：剥标签后无文本（阅读占位；epub 导出用 raw）
             return "[图片页——简版暂不支持图片]"
         end
         return text
@@ -207,7 +208,7 @@ function Download.fetch_chapter_text(book_id, chapter_uid, psvts)
     elseif not text then
         return nil, err
     end
-    return text
+    return text, nil, text
 end
 
 ------------------------------------------------------------------ spool
@@ -372,6 +373,29 @@ function Download.list_downloaded_chapters(book_id)
     end
     table.sort(out, function(a, b) return a.chapterIdx < b.chapterIdx end)
     return out
+end
+
+------------------------------------------------------------------ 原始 xhtml 落盘（epub 导出素材）
+
+-- 按 uid 存解码后的原始内容：epub 书 = xhtml（保结构保图标记）；
+-- txt 书 = 同正文文本。best-effort：写盘失败不影响阅读路径。
+function Download.save_raw(book_id, chapter_uid, raw)
+    local dir = Download.SPOOL .. "/" .. tostring(book_id) .. "/xhtml"
+    os.execute("mkdir -p '" .. dir .. "'")
+    local f = io.open(dir .. "/" .. tostring(chapter_uid) .. ".xhtml", "w")
+    if not f then return false end
+    f:write(raw or "")
+    f:close()
+    return true
+end
+
+function Download.read_raw(book_id, chapter_uid)
+    local f = io.open(Download.SPOOL .. "/" .. tostring(book_id) .. "/xhtml/"
+        .. tostring(chapter_uid) .. ".xhtml", "r")
+    if not f then return nil end
+    local s = f:read("*a")
+    f:close()
+    return s ~= "" and s or nil
 end
 
 ------------------------------------------------------------------ 章图片资产（chapter.tar）

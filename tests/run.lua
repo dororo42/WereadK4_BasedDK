@@ -22,6 +22,7 @@ local suites = {
     "log_test",
     "download_list_test",
     "downloaded_test",
+    "epub_test",
     "shelf_recent_test",
     "fonts_test",
     "download_batch_test",
