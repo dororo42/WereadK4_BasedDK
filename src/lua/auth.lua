@@ -360,6 +360,23 @@ end
 
 local last_renew_attempt = 0
 
+-- 最近一次续期/探测结论（状态栏数据源；进程内缓存，真实网络操作发生时自动更新）。
+-- "replaced"/"stale"=在线 "expired"=登录失效 "network"=无网络 nil=未检测。
+Auth.last_renew_result = nil
+
+-- 主菜单状态行（不触网）：登录态 + 最近续期结论 → 展示标签。
+function Auth.status()
+    if not Api.has_login() then return "未登录" end
+    if Auth.last_renew_result == "replaced" or Auth.last_renew_result == "stale" then
+        return "在线"
+    elseif Auth.last_renew_result == "expired" then
+        return "离线·登录失效"
+    elseif Auth.last_renew_result == "network" then
+        return "离线·无网络"
+    end
+    return "已登录"
+end
+
 -- 用 wr_rt 换新的 wr_skey。返回 status（见 classify_renewal）+ 错误串。
 -- 落盘纪律：先判成功，再改副本，最后原子替换——失败响应一律不触盘。
 function Auth.renew(force)
@@ -367,6 +384,7 @@ function Auth.renew(force)
     if not force and now - last_renew_attempt < Auth.RENEW_COOLDOWN_S then
         return "cooling"
     end
+    Auth.last_renew_result = nil        -- 发起真探测：清掉旧结论，失败路径不再残留"在线"
     last_renew_attempt = now
 
     local auth = Api.load_auth()
@@ -409,6 +427,7 @@ function Auth.renew(force)
         succ = data ~= nil and WeRead.is_success_response(data) or false,
         new_skey = fresh.wr_skey,
     })
+    if result ~= "cooling" then Auth.last_renew_result = result end
 
     if result == "replaced" or result == "stale" then
         -- 只增量收紧：新 key 覆盖同名项，其余保留；sanitize 兜住条目名。

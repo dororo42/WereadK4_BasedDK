@@ -24,19 +24,28 @@ local Fonts = require("fonts")
 
 
 -- 菜单项随登录态变化（shelf/阅读在登录后可用）
+-- 登录态菜单：在线能力挂检查连接；凭据失效(离线·登录失效)时追加扫码登录——
+-- 只在用户显式选择时才出二维码（绝不自动扫码，风控约束）。
 local function build_items()
+    local status = Auth.status()
     if Api.has_login() then
         local auth = Api.load_auth()
         local name = tostring(auth.account.name or auth.account.user_vid or "已登录")
-        return { "继续阅读", "书架", "已下载", "同步进度", "设置", "运行状态", "退出" }, name
+        local items = { "继续阅读", "书架", "已下载", "同步进度", "检查连接", "设置", "运行状态" }
+        if status == "离线·登录失效" then
+            items[#items + 1] = "扫码登录"
+        end
+        items[#items + 1] = "退出"
+        return items, name, status
     end
-    return { "登录", "书架(需登录)", "已下载", "设置", "运行状态", "退出" }, nil
+    return { "扫码登录", "书架(需登录)", "已下载", "设置", "运行状态", "退出" }, nil, status
 end
 
-local items, account_name = build_items()
+local items, account_name, account_status = build_items()
 
 local sel = 1
 local running = true
+local last_check_ts = 0          -- 「检查连接」防抖（用户显式动作，60s 内直接回缓存结论）
 
 assert(wr.fb_open(), "fb_open failed")
 -- SMOKE 允许输入被占用（KOReader EVIOCGRAB 独占时仍可自动验收渲染）；
@@ -64,11 +73,21 @@ local function text(x, y, s, fg, font_id)
 end
 
 local function draw()
-    items, account_name = build_items()
+    items, account_name, account_status = build_items()
     if sel > #items then sel = #items end
     wr.fb_fill(0, 0, W, H, 0x00)                            -- 白底
     local title = "微信读书 K4" .. (account_name and ("  " .. account_name) or "")
     text(16, 14, title, 0xFF, ft_main)                      -- 标题（含账号名）
+    -- 右上角时钟（小字右对齐）：e-ink 常亮场景下比状态栏更省一次翻屏
+    local clock = os.date("%m-%d %H:%M")
+    local function small_w(s)
+        return (FT_MODE and ft_small) and (wr.font_width(ft_small, s) or #s * 10) or #s * 10
+    end
+    if ft_small then
+        wr.fb_text_ft(ft_small, W - 16 - small_w(clock), 22, clock, 0x60)
+    else
+        wr.fb_text(W - 16 - small_w(clock), 22, clock, 1, 0x60)
+    end
     wr.fb_fill(16, 14 + TITLE_H, W - 32, 2, 0xFF)           -- 分隔线
 
     for i, name in ipairs(items) do
@@ -83,8 +102,11 @@ local function draw()
 
     if ft_small then
         wr.fb_text_ft(ft_small, 16, H - 40, "上下移动  中键选择  返回退出", 0x60)
+        -- 页脚右侧账号状态（Auth.status 不触网；探测入口=「检查连接」）
+        wr.fb_text_ft(ft_small, W - 16 - small_w(account_status), H - 40, account_status, 0x60)
     else
         wr.fb_text(16, H - 26, "Up/Down:move  Center:select  Back:exit", 1, 0x60)
+        wr.fb_text(W - 16 - small_w(account_status), H - 26, account_status, 1, 0x60)
     end
     wr.fb_quant()      -- Duokan 16 级量化（幂等，绘制期统一收敛）
     wr.fb_refresh(0)   -- partial 不闪
@@ -333,6 +355,7 @@ local function status_screen(ft_main, ft_small)
         y = y + (small and 30 or 44)
     end
     row("运行状态", false)
+    row("账号: " .. tostring(Auth.status()), true)
     row(mem[1] or "", true)
     row(mem[2] or "", true)
     row(mem[3] or "", true)
@@ -500,7 +523,7 @@ if not SMOKE then
         elseif key == "Press" then
             if items[sel] == "退出" then
                 running = false
-            elseif items[sel] == "登录" then
+            elseif items[sel] == "扫码登录" then
                 local account, lerr = Auth.login(
                     function(url) Auth.draw_login_screen(url, "微信扫码登录", "手机微信扫码 · Back 取消") end,
                     function(msg) Auth.clear_screen(msg) end)
@@ -514,6 +537,27 @@ if not SMOKE then
                     while wr.millis() - t0 < 2500 do end
                 end
                 sel = 1
+                draw()
+            elseif items[sel] == "检查连接" then
+                -- 手动探测入口：force 绕过 600s 冷却是用户显式动作；60s 防抖防连点。
+                -- 只报结论不扫二维码——renew 失败 ≠ 该重扫（可能是无网/冷却）。
+                sel = 1
+                local res, rerr
+                if os.time() - last_check_ts < 60 then
+                    res = "debounced"
+                    show("刚检查过: " .. Auth.status(), true)
+                else
+                    Auth.clear_screen("正在检测连接…")
+                    res, rerr = Auth.renew(true)
+                    last_check_ts = os.time()
+                    local msg = { replaced = "在线（会话已续期）", stale = "在线（凭据稍受限）",
+                        expired = "离线：登录已失效（可扫码重新登录）",
+                        network = "离线：无网络连接", cooling = "状态未变（冷却中）",
+                        ["no-refresh"] = "登录态缺少 refreshToken，建议扫码登录" }
+                    show("检查连接: " .. (msg[res] or tostring(res)) ..
+                        (msg[res] == nil and (" " .. tostring(rerr)) or ""), true)
+                end
+                Log.info(string.format("conn check: %s", tostring(res)))
                 draw()
             elseif items[sel] == "已下载" then
                 sel = 1

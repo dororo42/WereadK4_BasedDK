@@ -1,5 +1,36 @@
 # LOG — 动作日志（ub-mode）
 
+### 账号状态 + UI 打磨（用户口径：在线/离线/扫码登录）
+
+**目标**：主菜单显示账号状态（在线/离线/未登录），提供扫码登录与显式检测入口；
+顺手 UI 打磨（右上角时钟、状态屏加账号行）。
+
+### 动作
+
+1. `src/lua/auth.lua`：`Auth.last_renew_result`（renew 各 return 点记录最近续期结论，
+   发起真探测时清旧值防"在线"残留）+ `Auth.status()`（不触网映射：未登录/已登录/
+   在线 replaced|stale/离线·登录失效 expired/离线·无网络 network）。
+2. `src/lua/menu.lua`：
+   - 页脚右侧常驻账号状态（Auth.status），标题行右侧 MM-DD HH:MM 时钟（小字右对齐）；
+   - 「登录」→「扫码登录」（两态菜单）；登录失效态（离线·登录失效）菜单**追加**
+     「扫码登录」项——只在用户显式选择时才出二维码（绝不自动扫码，风控约束）；
+   - 登录态菜单加「检查连接」：Auth.renew(true) 显式探测 + 60s menu 层防抖 +
+     结论如实回报（在线会话已续期/凭据稍受限/登录失效可扫码/无网络/冷却中/
+     缺 refreshToken）；修复 res 作用域 + draw() 三返回值接收（状态随检测刷新）；
+   - 运行状态屏加「账号: <状态>」行。
+3. 测试：renew_test 加 Auth.status 六态断言；menu_ui_test 适配 8 项菜单键位
+   （检查连接=pos5、设置=pos6、运行状态=pos7）+ 新增 1a2（离线失效态追加扫码登录、
+   页脚如实显示、不再显示已登录）与 1b（检查连接：过程提示+冷却中如实回报）+ 状态/
+   时钟页脚断言；auth 桩补 status（可变桩 auth_status_ret）。
+
+### 验证
+
+- `lua5.1 tests/run.lua`：**22 套全绿**；全仓 luac 零错；make host-selftest OK。
+- **设备部署 pending**：设备休眠断 WiFi 掉线（ssh no route，两次重试间隔 90s）。
+  设备上线后：`tools/deploy-weread.sh`（auth.json 备份纪律照旧）→ menu SMOKE →
+  真机验收三态页脚/检查连接/扫码登录入口。
+
+
 ### fpcheck 并入【Kual】菜单（用户口径补落实，KUAL 仓 a8b5127）
 
 - 机制取证：KUAL 内置【Kual】菜单由 parse.awk `json_self_menu()` 合成（serial 0，

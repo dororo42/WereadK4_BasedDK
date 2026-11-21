@@ -183,7 +183,9 @@ stub("api", {
     BASE_URL = "https://weread.qq.com",
     get_shelf = function() return { books = {} } end,
 })
+local auth_status_ret = "已登录"
 stub("auth", {
+    status = function() return auth_status_ret end,
     clear_screen = function(m)
         cur_frame[#cur_frame + 1] = "CLR:" .. tostring(m)
         capture()
@@ -306,6 +308,7 @@ local function reset_state()
     sync_side, sync_why = "local", "same"
     reader_ret, dl_result = nil, nil
     poll0_key = nil
+    auth_status_ret = "已登录"
     last_book_id, last_rec = nil, nil
 end
 local function reading_state()
@@ -320,14 +323,36 @@ keys("Back")
 local ok, err = run_menu()
 check(ok, "主菜单应跑通，实得 " .. tostring(err))
 local txt = all_text()
-for _, name in ipairs({ "继续阅读", "书架", "已下载", "同步进度", "设置", "运行状态", "退出" }) do
+for _, name in ipairs({ "继续阅读", "书架", "已下载", "同步进度", "检查连接", "设置", "运行状态", "退出" }) do
     check(txt:find(name, 1, true) ~= nil, "首屏应列出「" .. name .. "」，实得 " .. txt:sub(1, 120))
 end
 check(txt:find("测试号", 1, true) ~= nil, "首屏应显示账号名")
+check(txt:find("已登录", 1, true) ~= nil, "页脚应显示账号状态（Auth.status）")
+check(txt:match("%d%d%-%d%d %d%d:%d%d") ~= nil, "标题行右侧应有 MM-DD HH:MM 时钟")
+
+-- 1a2) 登录失效态：菜单追加「扫码登录」（只在用户显式选择时才出码）
+reset_state()
+auth_status_ret = "离线·登录失效"
+keys("Back")
+ok, err = run_menu()
+check(ok, "离线失效态应跑通，实得 " .. tostring(err))
+txt = all_text()
+check(txt:find("扫码登录", 1, true) ~= nil, "登录失效时必须提供扫码登录入口")
+check(txt:find("离线·登录失效", 1, true) ~= nil, "页脚应如实显示离线·登录失效")
+check(txt:find("已登录", 1, true) == nil, "失效态不得再显示「已登录」")
+
+-- 1b) 检查连接入口：调 Auth.renew(true) 并如实回报结论
+reset_state()
+keys("Down", "Down", "Down", "Down", "Press")  -- 第 5 项 → 检查连接
+ok, err = run_menu()
+check(ok, "检查连接应跑通，实得 " .. tostring(err))
+check(all_text():find("正在检测连接", 1, true) ~= nil, "检测中应有过程提示")
+check(all_text():find("检查连接: 状态未变（冷却中）", 1, true) ~= nil,
+    "renew 结论应如实回报，实得 " .. all_text():sub(1, 200))
 
 -- 2) 设置 → 字体：face 打不开时不得写配置（坏路径会让下次翻页无声降级）
 reset_state()
-keys("Down", "Down", "Down", "Down", "Press", -- 主菜单 → 设置（第 5 项）
+keys("Down", "Down", "Down", "Down", "Down", "Press", -- 主菜单 → 设置（第 6 项）
      "Down", "Down", "Down", "Press",        -- 设置项 → 字体（第 4 项）
      "Press")                                -- 值选择 → 唯一候选
 font_fail[DEFAULT_FONT] = true
@@ -341,7 +366,7 @@ check(call_of("font_load") ~= nil, "选择时必须先在设备上开一次 face
 
 -- 3) 设置 → 字体：能打开则落盘，且菜单自身立即换面（这一屏就是预览）
 reset_state()
-keys("Down", "Down", "Down", "Down", "Press", "Down", "Down", "Down", "Press", "Press")
+keys("Down", "Down", "Down", "Down", "Down", "Press", "Down", "Down", "Down", "Press", "Press")
 ok, err = run_menu()
 check(ok, "字体切换应跑通，实得 " .. tostring(err))
 check(Config.load().font_path == DEFAULT_FONT,
@@ -357,7 +382,7 @@ check(after >= 2 and sizes:find("30", 1, true) and sizes:find("20", 1, true),
 -- 4) 设置 → 云端进度=关：阅读时一个云端请求都不发（说不同步就别联网）
 reset_state()
 reading_state()
-keys("Down", "Down", "Down", "Down", "Press", -- 设置（第 5 项）
+keys("Down", "Down", "Down", "Down", "Down", "Press", -- 设置（第 6 项）
      "Down", "Down", "Press",                -- 云端进度（第 3 项）→ 值选择
      "Down", "Press",                        -- 关
      "Back", "Back",                          -- 提示屏 + 退出设置
@@ -439,8 +464,8 @@ check(count_of("dl_browse") == 1, "中键已下载必须进 Downloaded.browse")
 
 -- 7c) 「运行状态」入口：状态屏（内存/堆/spool 占用/错误计数/app.log 尾部）
 reset_state()
-keys("Down", "Down", "Down", "Down", "Down", "Press", -- 第 6 项 → 运行状态
-     "Back")                                            -- 任意键返回 → 主菜单 Back 退出
+keys("Down", "Down", "Down", "Down", "Down", "Down", "Press", -- 第 7 项 → 运行状态
+     "Back")                                                    -- 任意键返回 → 主菜单 Back 退出
 ok, err = run_menu()
 check(ok, "运行状态屏应跑通，实得 " .. tostring(err))
 txt = all_text()

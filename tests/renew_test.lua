@@ -73,5 +73,25 @@ check(Auth.classify_renewal(r) == Auth.classify_renewal(r), "classifier is pure"
 check(type(Auth.RENEW_COOLDOWN_S) == "number" and Auth.RENEW_COOLDOWN_S >= 300,
     "renewal cooldown is at least 5 minutes")
 
+-- 10) Auth.status 语义（主菜单状态行数据源，不触网）
+package.loaded.api = package.loaded.api or require("api")
+local Api = require("api")
+local saved_has_login = Api.has_login
+Auth.last_renew_result = nil
+Api.has_login = function() return false end
+check(Auth.status() == "未登录", "无登录态必须显示未登录，实得 " .. Auth.status())
+Api.has_login = function() return true end
+check(Auth.status() == "已登录", "登录但未检测显示已登录，实得 " .. Auth.status())
+Auth.last_renew_result = "replaced"
+check(Auth.status() == "在线", "replaced 应显示在线，实得 " .. Auth.status())
+Auth.last_renew_result = "stale"
+check(Auth.status() == "在线", "stale 也算在线（凭据稍受限）")
+Auth.last_renew_result = "expired"
+check(Auth.status() == "离线·登录失效", "expired 显示离线·登录失效")
+Auth.last_renew_result = "network"
+check(Auth.status() == "离线·无网络", "network 显示离线·无网络")
+Api.has_login = saved_has_login
+Auth.last_renew_result = nil
+
 print("renew_test: " .. fails .. " failure(s)")
 return fails
