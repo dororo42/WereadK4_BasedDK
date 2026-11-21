@@ -6,8 +6,7 @@ action 项=KUAL 主菜单按钮，无子菜单；exitmenu:true=点击后 KUAL �
 设备 menu.json.v2-backup）。
 
 诊断/恢复两个脚本仍在 `/mnt/us/weread/`（ssh 调用；不再占用 KUAL 菜单位）。
-另：fpcheck 扩展的「Write fingerprint report」为独立 KUAL 根级条目（gawk 调试
-工具遗留），保持原位未动。
+另：fpcheck 的「Write fingerprint report」已并入 KUAL 内置【Kual】菜单（2026-11-21 用户口径；fpcheck 根项命名 "KUAL" 子菜单→KUAL collate 同名合并机制，根按钮显示 "KUAL+" 为上游合并标记）。未动。
 
 ## KUAL 执行机制（k4weread.sh 取证）
 

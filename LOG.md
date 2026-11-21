@@ -1,5 +1,18 @@
 # LOG — 动作日志（ub-mode）
 
+### fpcheck 并入【Kual】菜单（用户口径补落实，KUAL 仓 a8b5127）
+
+- 机制取证：KUAL 内置【Kual】菜单由 parse.awk `json_self_menu()` 合成（serial 0，
+  show_KUAL_buttons=2/3/99→Sort/Save log/Quit），与扩展树同入 MENUS 数组，经
+  collate() 做**同名同级子菜单合并**（collate 默认开）→ 扩展根项命名 "KUAL" 即并入。
+- 设备实证：基线（现菜单重跑 fork parse.awk）md5 与 /var/tmp/KUAL.cache 完全一致；
+  改 fpcheck/menu.json 根项为 "KUAL" 子菜单（条目 priority=4）→ 根级按钮 6→5
+  （fpcheck 独立按钮消失），「Write fingerprint report」落 `1:ff00ff00ff030b`
+  =【Kual】子菜单内；根按钮显示 **"KUAL+"**（上游 collate 合并标记，非异常）。
+- 设备 menu.json 已部署、KUAL.cache 已重建（下次启动直接生效）；本机同步：
+  /home/doro/KUAL deploy-k4/fpcheck+README+LOG.md（a8b5127 已提交），
+  本仓 kual/README.md 旧表述更正。
+
 ### 已下载书目 + 运行状态（测试 log 调试面，本批）
 
 **目标**：主菜单新增「已下载」（离线浏览已下载书目→章→阅读）与「运行状态」
