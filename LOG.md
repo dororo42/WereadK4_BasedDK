@@ -1,5 +1,31 @@
 # LOG — 动作日志（ub-mode）
 
+### 整本 epub 完整性/加密核实（用户口径，纯取证零代码改动）+ push（d477149..d901da0 共 7 提交）
+
+**证据**：设备上插件（weread_K4 v9.12）生成的真实整本 epub
+（koreader/weread/cache/3300151063/空山第一部 - full.epub，574KB，拉回本机
+python zipfile 逐项检验）+ 插件组装源码（content.lua write_epub）+ 传输层
+探针（e_0 分片/tar/catalog）。
+
+**结论**：
+1. **微信读书平台不提供整本 epub 文件下载**——内容以章为单位下发：
+   正文 = 32 字符十六进制前缀 + base64(xhtml)（防爬传输编码，非加密，
+   PD94bWwg→"<?xml"）；图片/css = 章 tar 包（明文 ustar）。epub 是本地
+   （插件）用解码后的 xhtml + 资产重新组装的。
+2. **组装产物 = 完整合规 epub**：62 entries；mimetype 未压缩首条
+   "application/epub+zip"（规范要求）✓；META-INF/container.xml ✓；
+   content.opf（manifest 59 项/spine 19 引用）✓；text/chapter-00x.xhtml
+   20 个（含 cover.xhtml/nav.xhtml）✓；images/ 37 图 ✓；nav.xhtml+toc.ncx
+   双目录 ✓；style.css ✓；组装后有 verify_epub_package 校验再原子改名发布。
+3. **无加密**：无 encryption.xml/rights/DRM 文件；章节明文直接可读
+   （版权页中文原样）；图片未加密。即：内容公开可读、无 DRM 层，
+   但平台不直接发 epub 文件——"完整 epub"只能本地组装。
+4. **对本项目**：当前 spool 存 html_text 纯文本（结构已剥），不足以直接
+   组装 epub；若要整本导出，需改存解码后原始 xhtml + 资产，按插件同口径
+   组装（mimetype/container/opf/nav/ncx/css）——列为可选后续项，未实施
+   （用户口径是核实，不是实现）。
+
+
 ### 图片加载落地 + 遗留清理（用户口径：清理+持续优化+修复图片加载）
 
 **清理**：/mnt/us/weread/bin（34.8MB，闭源包 kindlehf/kindlepw2 多设备遗留）+
