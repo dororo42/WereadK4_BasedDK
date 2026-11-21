@@ -48,7 +48,7 @@ function Auth.draw_login_screen(url, title, hint)
     wr.fb_fill(0, 0, W, H, 0x00)
     if title and wr.font_load then
         pcall(function()
-            local ft = Fonts.load(30)
+            local ft = Fonts.load(24)
             if ft then
                 local w = wr.font_width(ft, title)
                 wr.fb_text_ft(ft, math.floor((W - w) / 2), 30, title, 0xFF)
@@ -66,7 +66,7 @@ function Auth.draw_login_screen(url, title, hint)
     end
     if hint and wr.font_load then
         pcall(function()
-            local ft = Fonts.load(20)
+            local ft = Fonts.load(16)
             if ft then
                 local w = wr.font_width(ft, hint)
                 wr.fb_text_ft(ft, math.floor((W - w) / 2), y0 + size + 16, hint, 0x40)

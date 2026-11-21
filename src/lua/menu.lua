@@ -55,14 +55,15 @@ if not SMOKE then assert(ok_in, "input_open failed (KOReader 独占中?)") end
 
 local W, H = wr.fb_w(), wr.fb_h()
 
--- freetype 字体：主字号 30 + 小字号 20；加载失败回退点阵
-local ft_main = Fonts.load(30)
-local ft_small = ft_main and Fonts.load(20) or nil
+-- 设计令牌（多看 600×800 观感：标题 26 / 列表 24 / 小字 16 / 行高 38）：
+-- 与 shelf/downloaded/reader 页脚同一套尺寸，一处调整全线跟随。
+local ft_main = Fonts.load(24)
+local ft_small = ft_main and Fonts.load(16) or nil
 local FT_MODE = (ft_main ~= nil)
 
-local ITEM_H   = FT_MODE and 46 or (16 * 2)      -- 行高
-local TITLE_H  = FT_MODE and 44 or (16 * 2)
-local Y0       = 84
+local ITEM_H   = FT_MODE and 38 or (16 * 2)      -- 行高
+local TITLE_H  = FT_MODE and 36 or (16 * 2)
+local Y0       = 76
 
 local function text(x, y, s, fg, font_id)
     if FT_MODE and font_id then
@@ -352,7 +353,7 @@ local function status_screen(ft_main, ft_small)
         else
             wr.fb_text(24, y, s, 1, 0xFF)
         end
-        y = y + (small and 30 or 44)
+        y = y + (small and 26 or 38)
     end
     row("运行状态", false)
     row("账号: " .. tostring(Auth.status()), true)
@@ -603,7 +604,9 @@ if not SMOKE then
                 end
                 local entries = {
                     { key = "font_size",   name = "字号",
-                      opts = { {label="20 pt",v=20},{label="22 pt",v=22},{label="26 pt",v=26},{label="30 pt",v=30} } },
+                      opts = { {label="16 pt",v=16},{label="18 pt",v=18},{label="20 pt",v=20},
+                               {label="22 pt",v=22},{label="24 pt",v=24},{label="26 pt",v=26},
+                               {label="28 pt",v=28},{label="30 pt",v=30} } },
                     { key = "line_factor", name = "行距",
                       opts = { {label="紧凑",v=1.3},{label="标准",v=1.54},{label="宽松",v=1.8} } },
                     { key = "progress_sync", name = "云端进度",
@@ -621,9 +624,9 @@ if not SMOKE then
                           -- 菜单自身立即换面（这一屏就是最好的预览）；阅读页在下次
                           -- Reader.open 时才取新句柄，所以正文要换章才见效。
                           wr.font_close(ft_main)
-                          ft_main = Fonts.load(30)
+                          ft_main = Fonts.load(24)
                           if ft_small then wr.font_close(ft_small) end
-                          ft_small = ft_main and Fonts.load(20) or nil
+                          ft_small = ft_main and Fonts.load(16) or nil
                           return "已切换字体: " .. clip(o.label, 10)
                       end },
                 }

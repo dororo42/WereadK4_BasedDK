@@ -22,10 +22,10 @@ local Fonts = require("fonts")
 
 local Reader = {}
 
-Reader.FONT_MIN, Reader.FONT_MAX = 18, 40       -- 字号钳制边界（设置 UI 与钳制共用）
+Reader.FONT_MIN, Reader.FONT_MAX = 16, 40       -- 字号钳制边界（设置 UI 与钳制共用）
 
 local function font_size()
-    local fs = tonumber(Config.load().font_size) or 26
+    local fs = tonumber(Config.load().font_size) or 22
     if fs < Reader.FONT_MIN then fs = Reader.FONT_MIN end
     if fs > Reader.FONT_MAX then fs = Reader.FONT_MAX end
     return fs
@@ -38,7 +38,7 @@ local function line_h(fs)
 end
 local MARGIN_X = 30
 local MARGIN_TOP = 24
-local MARGIN_BOTTOM = 56          -- 页脚区
+local MARGIN_BOTTOM = 44          -- 页脚区（16px 点阵页脚，正文区比旧 56 多 12px/屏）
 
 -- 键位表：一处声明，dispatch 只做查表（改键位不动控制流）。
 -- 导出为模块字段，使键位本身可在主机侧被单测钉住（tests/reader_keys_test.lua）——

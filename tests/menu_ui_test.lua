@@ -376,8 +376,8 @@ local loads = count_of("font_load")
 check(loads >= 5,
     "启动 2 面 + 验证 1 次 + 换面后主/小字重开 2 次 = 至少 5 次 font_load（菜单立即生效），实得 " .. loads)
 local after, sizes = loads_after_write("font_path")
-check(after >= 2 and sizes:find("30", 1, true) and sizes:find("20", 1, true),
-    "写盘后必须重开主字(30)与小字(20)，否则这一屏不换面=死键，实得 " .. after .. " 次 [" .. sizes .. "]")
+check(after >= 2 and sizes:find("24", 1, true) and sizes:find("16", 1, true),
+    "写盘后必须重开主字(24)与小字(16)，否则这一屏不换面=死键，实得 " .. after .. " 次 [" .. sizes .. "]")
 
 -- 4) 设置 → 云端进度=关：阅读时一个云端请求都不发（说不同步就别联网）
 reset_state()

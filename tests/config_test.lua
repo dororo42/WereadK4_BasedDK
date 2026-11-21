@@ -14,7 +14,7 @@ Config.PATH = TMP
 
 -- 1) 缺失文件 → 全默认
 local c = Config.load()
-check("defaults.on_missing", c.font_size == 26)
+check("defaults.on_missing", c.font_size == 22)
 
 -- 2) set → load 回读
 check("set.ok", Config.set("font_size", 30))
@@ -27,7 +27,7 @@ check("line_factor.default", Config.load().line_factor == 1.54)
 
 -- 4) 损坏文件 → 回默认（不崩溃）
 local f = io.open(TMP, "w"); f:write("{broken"); f:close()
-check("corrupt.fallback", Config.load().font_size == 26)
+check("corrupt.fallback", Config.load().font_size == 22)
 
 -- 5) 原子写不留 .tmp
 Config.set("font_size", 22)

@@ -17,10 +17,10 @@ local Reader = require("reader")
 
 local DL = {}
 
-local FT_MAIN_PX = 30
-local FT_SMALL_PX = 18
-local ITEM_H = 46
-local Y0 = 84
+local FT_MAIN_PX = 24
+local FT_SMALL_PX = 16
+local ITEM_H = 38
+local Y0 = 76
 local ROWS = 12                     -- 12 行/屏（书目与章列表共用）
 
 local function ft_text(ft, x, y, s, fg)

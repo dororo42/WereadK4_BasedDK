@@ -12,7 +12,7 @@ Config.PATH = "/mnt/us/weread/data/config.json"
 -- 默认值集中一处：新键只在这里加，旧 config.json 自动补默认。
 -- font_path 不在此表：它的默认值是字体清单的首项，由 fonts.lua 唯一持有，
 -- 在这里再写一遍就成了两处决策。progress_sync = 打开书本时是否拉云端位置。
-Config.DEFAULTS = { font_size = 26, line_factor = 1.54, progress_sync = true }
+Config.DEFAULTS = { font_size = 22, line_factor = 1.54, progress_sync = true }
 -- 行高 = 字号 × line_factor
 
 function Config.load()

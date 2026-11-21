@@ -63,7 +63,7 @@ local function draw_page(books, sel, ft_main, ft_small)
         end
         local author = tostring(book.author or "")
         if author ~= "" and idx ~= sel then
-            ft_text(ft_small, 400, y + 4, author, 0x60)
+            ft_text(ft_small, 440, y + 4, author, 0x60)
         end
     end
 
@@ -76,8 +76,8 @@ end
 -- 主循环：返回选中 bookId | nil(Back 退出)
 function Shelf.run()
     assert(wr.fb_open(), "fb_open failed")
-    local ft_main = Fonts.load(30)
-    local ft_small = Fonts.load(18)
+    local ft_main = Fonts.load(24)
+    local ft_small = Fonts.load(16)
 
     Auth.clear_screen("正在同步书架…")
     local data, err = Api.get_shelf()
