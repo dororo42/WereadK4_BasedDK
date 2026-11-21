@@ -1,5 +1,41 @@
 # LOG — 动作日志（ub-mode）
 
+### isword 0.3.9 上报机制核实（用户口径：不搞补报节奏，在线读多少报多少）
+
+**取证面**：备份 tar 里的闭源二进制 bin/kindle{hf,pw2}/weread_ui（9.6MB 静态
+ARM stripped）strings 提取 + isword_k4/sealed 启动脚本 + docs（phase1-3 未覆盖
+上报层，本轮为首次取证）。
+
+**isword 双通道机制**：
+1. **web 通道**：POST /web/book/read，payload `{"vid":%s,"skey":%s,"ql":%s,
+   "rt":%s,"deviceId":%s,...}`（凭据在载荷内+cookie 双写，rt 为字符串）。
+   **活动量计时的关键证据**：`ui reading dwell limit reached; waiting for page
+   change or reader resume`——阅读秒数与翻页/恢复阅读事件挂钩，驻留超限即停
+   止累计，等下一次翻页或回到阅读再续——静默开着不翻页不计时。即 isword 的
+   rt=「有翻页活动的时间」，天然就是"在线阅读多少报多少"。
+2. **原生通道**：`ui native time report ... seconds=%lld hours=%zu durable=%d
+   canceled=%d`——向 i.weread 网关按**小时粒度记录数组**（`,"finish":false,
+   "hours":[` 分批标志）上报原生 App 口径的阅读时长，带 durable 离线持久
+   （`ui offsync report ... durable=`）、deferred 分阶段（`native time deferred
+   stage=... reason=`）、本地保留重试（`reading time background retry retained
+   locally`）。
+3. **本地台账**：`{"schema":1,...,"total":%lld,"eink":%lld,"week":%lld,
+   "today":%lld,"weekStart":...,"readTotal":...}` + 按日记录 `"%d":{"at":%lld,
+   "seconds":%lld}` + v2 记录（timeMs/nativeSeconds/recordSeconds/priorMs/
+   elapsedMs）；服务端用户画像字段 user.einkTotalRead/einkWeekRead（墨水屏
+   阅读时长独立口径）。
+4. 心跳间隔类常量在 stripped 二进制中不可见（数字常量不进 strings）——
+   翻页/恢复驱动的 dwell 语义是节奏的最强证据。
+
+**对上游三方的对照**：插件=30s 心跳+水印+离线补报（lossless 但有定时器）；
+本项目=离章单报、rt=min(实际,30)（超时部分丢失）；isword=活动量计时
+（dwell 上限）+双通道+本地台账。用户拍板方向（不搞补报节奏）下，可采
+isword 的活动量口径：rt 按**翻页活动**累计（reader 每次翻页/换章事件累计
+秒数，非墙钟），离章时把累计值分片 ≤30s 连发（单次网络会话，无定时器、
+无跨会话积压）——这就是"在线阅读多少报多少"且兼容服务端 30s 静默丢弃线。
+原生 hours 通道暂缓（需要 i.weread 网关鉴权取证，成本高收益存疑）。
+
+
 ### 整本 epub 导出实施（用户口径「实施」，push 已批随本批）
 
 **架构**：C 层 `wr.zip_write`（store 型最小 zip 写入器：CRC32+local/central/EOCD，
