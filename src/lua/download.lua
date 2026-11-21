@@ -12,6 +12,7 @@ local WeRead = require("protocol")
 local Shard = require("shard")
 local Json = require("json")
 local Cookie = require("cookie")
+local Log = require("log")
 
 local Download = {}
 
@@ -250,6 +251,7 @@ function Download.save_chapter(book_id, chapter_idx, title, text)
     if not f then return nil, "open spool failed" end
     f:write(text)
     f:close()
+    Log.info(string.format("spool %s ch%d bytes=%d", book_id, chapter_idx, #text))
     return spool_path(book_id, chapter_idx)
 end
 
@@ -259,6 +261,117 @@ function Download.read_chapter(book_id, chapter_idx)
     local text = f:read("*a")
     f:close()
     return text
+end
+
+------------------------------------------------------------------ manifest（书目元数据，供"已下载书目"离线浏览）
+
+-- manifest: books/<id>/manifest.json
+--   { bookId=, title=, last_download=, chapters={ {chapterIdx=,chapterUid=,title=} } }
+-- fetch_catalog 成功即全量写入（chapters 与 spool 解耦：manifest=目录，spool=已下正文）。
+
+local function manifest_path(book_id)
+    return Download.SPOOL .. "/" .. tostring(book_id) .. "/manifest.json"
+end
+
+function Download.save_manifest(book_id, title, chapters)
+    local dir = Download.SPOOL .. "/" .. tostring(book_id)
+    os.execute("mkdir -p '" .. dir .. "'")
+    local list = {}
+    for _, ch in ipairs(chapters or {}) do
+        list[#list + 1] = {
+            chapterIdx = ch.chapterIdx, chapterUid = ch.chapterUid,
+            title = ch.title, wordCount = ch.wordCount,
+        }
+    end
+    return Json.write_atomic(manifest_path(book_id), {
+        bookId = tostring(book_id), title = tostring(title or ""),
+        last_download = os.time(), chapters = list,
+    })
+end
+
+function Download.load_manifest(book_id)
+    local f = io.open(manifest_path(book_id), "r")
+    if not f then return nil end
+    local text = f:read("*a")
+    f:close()
+    local m = Json.decode(text or "")
+    if type(m) ~= "table" or type(m.chapters) ~= "table" then return nil end
+    return m
+end
+
+-- 已下载书目清单：books/ 下每个含 manifest 的目录一项。
+-- { bookId=, title=, chapters_total=, chapters_downloaded=, bytes=, last_download= } 按
+-- last_download 降序。Log.error_count 由调用方单独取（状态屏）。
+function Download.list_books()
+    local out = {}
+    local dirs = {}
+    local p = io.popen("ls -1 " .. Download.SPOOL .. " 2>/dev/null")
+    if not p then return out end
+    for id in p:lines() do dirs[#dirs + 1] = id end
+    p:close()
+    for _, id in ipairs(dirs) do
+        if id:match("^%d+$") then
+            local m = Download.load_manifest(id)
+            local chapters_down, bytes = 0, 0
+            local dp = Download.SPOOL .. "/" .. id
+            local pp = io.popen("ls -1 " .. dp .. "/*.txt 2>/dev/null")
+            if pp then
+                for fn in pp:lines() do
+                    chapters_down = chapters_down + 1
+                    local tf = io.open(fn, "rb")
+                    if tf then
+                        bytes = bytes + (tf:seek("end") or 0)
+                        tf:close()
+                    end
+                end
+                pp:close()
+            end
+            local last_dl = m and tonumber(m.last_download) or 0
+            out[#out + 1] = {
+                bookId = id,
+                title = (m and m.title or "") ~= "" and m.title or id,
+                chapters_total = m and m.chapters and #m.chapters or 0,
+                chapters_down = chapters_down,
+                bytes = bytes,
+                last_download = last_dl,
+            }
+        end
+    end
+    table.sort(out, function(a, b) return (a.last_download or 0) > (b.last_download or 0) end)
+    return out
+end
+
+-- 某书"已下载章节"清单（manifest.chapters ∩ spool 文件，按 chapterIdx 升序）。
+-- 返回 { {chapterIdx=, title=, text=} } | {}
+function Download.list_downloaded_chapters(book_id)
+    local m = Download.load_manifest(book_id)
+    local by_idx = {}
+    if m then
+        for _, ch in ipairs(m.chapters) do by_idx[tonumber(ch.chapterIdx)] = ch.title end
+    end
+    local out = {}
+    local dp = Download.SPOOL .. "/" .. tostring(book_id)
+    local pp = io.popen("ls -1 " .. dp .. "/*.txt 2>/dev/null")
+    if pp then
+        for fn in pp:lines() do
+            local idx = tonumber(fn:match("(%d+)%.txt$"))
+            if idx then
+                local tf = io.open(fn, "r")
+                if tf then
+                    local text = tf:read("*a")
+                    tf:close()
+                    out[#out + 1] = {
+                        chapterIdx = idx,
+                        title = by_idx[idx] or ("第" .. idx .. "章"),
+                        text = text,
+                    }
+                end
+            end
+        end
+        pp:close()
+    end
+    table.sort(out, function(a, b) return a.chapterIdx < b.chapterIdx end)
+    return out
 end
 
 ------------------------------------------------------------------ 按需取章
@@ -298,10 +411,14 @@ function Download.ensure_chapter(book_id, chapters, chapter_idx, sess)
     if not psvts then
         return nil, "psvts failed: " .. tostring(perr or "no psvts")
     end
+    local t0 = os.time()
     local text, terr = Download.fetch_chapter_text(book_id, ch.chapterUid, psvts)
     if not text then
+        Log.error(string.format("download %s ch%d: %s", book_id, ch.chapterIdx, tostring(terr)))
         return nil, terr
     end
+    Log.info(string.format("download %s ch%d bytes=%d %ds",
+        book_id, ch.chapterIdx, #text, os.time() - t0))
     local path, serr = Download.save_chapter(book_id, ch.chapterIdx, ch.title, text)
     if not path then
         return nil, serr

@@ -1,5 +1,43 @@
 # LOG — 动作日志（ub-mode）
 
+### 已下载书目 + 运行状态（测试 log 调试面，本批）
+
+**目标**：主菜单新增「已下载」（离线浏览已下载书目→章→阅读）与「运行状态」
+（内存/Lua堆/spool占用/错误计数/app.log 尾部）；log.lua 运行日志落地调试面。
+
+### 动作
+
+1. `src/lua/lib/log.lua` 新建：PATH=/mnt/us/weread/data/app.log（可注入主机 tmp），
+   级别 D/I/E（默认 I，debug 不落盘），200KB 超限按行边界截半轮转（保新丢旧），
+   `Log.errors` 进程内计数 + `Log.error_count()` 全日志 [E] 累计 + `Log.tail(n)`。
+   修复：tail 对文件尾 \n 不得多出空尾行（真 bug，测试抓出）。
+2. `src/lua/download.lua`：manifest 体系 `save_manifest/load_manifest`
+   （books/<id>/manifest.json：title/last_download/chapters[chapterIdx,Uid,title,wordCount]）；
+   `list_books()`（纯数字目录扫描、last_download 降序、bytes/chapters_down 统计，
+   无 manifest 回退显示 id）；`list_downloaded_chapters()`（manifest∩spool，升序，
+   标题来自 manifest）；`Download.book` on_progress 回 false → 取消传播修复。
+3. `src/lua/lib/downloaded.lua` 新建：`DL.browse()` 书列表→章列表→Reader 单章阅读，
+   list_loop 通用列表循环（Up/Down 回卷、Left/Right 翻页、Back 返回）；纯离线不触网。
+4. `src/lua/menu.lua`：两态菜单加「已下载」「运行状态」；`status_screen`（/proc/meminfo
+   前3行、collectgarbage 堆、spool X本/Y章/大小、错误计数 本次/累计、app.log 尾8行）；
+   `read_book(book_id, force_sync, title_hint)` 落 manifest + Log 埋点；
+   reader/download 关键路径 Log.info/error（下载字节数耗时、reader 分页数）。
+5. 测试：`tests/log_test.lua`（写入/级别过滤/轮转截半/计数/tail/不可写回退 6 用例）；
+   `tests/download_list_test.lua`（manifest 回读/纯数字目录过滤/∩语义/降序/无manifest
+   回退 6 用例，os.time 桩错开避免同秒排序不稳）；menu_ui_test 适配新菜单布局
+   （7项键位偏移是根因：旧脚本 Press 命中「已下载」触发严格桩报错）+ 新增 7b/7c
+   两入口接线断言；download 桩补 save_manifest/list_books、新增 downloaded/log 桩。
+
+### 验证
+
+- `lua5.1 tests/run.lua`：**22 套全绿**（新增 2 套）；全仓 luac -p 零错；C 层未变免重编。
+- 设备部署（auth.json 先备份 .bak-dlmenu，部署后 md5 与备份一致=登录态无损）：
+  menu SMOKE PIXEL-CHECK PASS EXIT=0；数据面真机冒烟：list_books 识别 5 本真实 spool
+  （字节数正确）、list_downloaded_chapters 章数/标题回退正确、Log tail/error_count 正常。
+- 已知形态：旧 spool（manifest 之前落的）total=0/title=id——首次打开该书后
+  read_book 落 manifest 自动补齐；不是缺陷。
+
+
 ### KUAL 菜单改造（用户三项口径，cdbf052）
 
 - **微信读书=主菜单单按钮直接启动**：menu.json 单条 depth-1 action 项（KUAL 源码

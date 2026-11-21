@@ -16,6 +16,7 @@
 -- 返回 { page=, total_pages=, action= }，action ∈ next_chapter|prev_chapter|toc|exit。
 
 local WeRead = require("protocol")
+local Log = require("log")
 local Config = require("config")
 local Fonts = require("fonts")
 

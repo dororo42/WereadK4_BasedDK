@@ -193,6 +193,15 @@ stub("auth", {
     login = function() return nil, "not-in-test" end,
 })
 stub("shelf", { run = function() calls[#calls + 1] = { f = "shelf" }; return "B77" end })
+stub("downloaded", { browse = function() calls[#calls + 1] = { f = "dl_browse" } end })
+stub("log", {
+    errors = 0,
+    info = function() end,
+    error = function() end,
+    debug = function() end,
+    tail = function() return {} end,
+    error_count = function() return 0 end,
+})
 stub("progress", {
     get_last = function() return last_book_id end,
     get = function() return last_rec end,
@@ -227,6 +236,8 @@ stub("download", {
     ensure_chapter = function() return "正文正文正文" end,
     new_session = function() return { psvts = "ps", pclts = "pc", token = "tk" } end,
     is_spooled = function() return false end,
+    save_manifest = function(_b, _title, _chs) end,
+    list_books = function() return {} end,
     book = function(_b, count, from, cb)
         calls[#calls + 1] = { f = "dl_book", count = count, from = from }
         if dl_result then
@@ -309,14 +320,14 @@ keys("Back")
 local ok, err = run_menu()
 check(ok, "主菜单应跑通，实得 " .. tostring(err))
 local txt = all_text()
-for _, name in ipairs({ "继续阅读", "书架", "同步进度", "设置", "退出" }) do
+for _, name in ipairs({ "继续阅读", "书架", "已下载", "同步进度", "设置", "运行状态", "退出" }) do
     check(txt:find(name, 1, true) ~= nil, "首屏应列出「" .. name .. "」，实得 " .. txt:sub(1, 120))
 end
 check(txt:find("测试号", 1, true) ~= nil, "首屏应显示账号名")
 
 -- 2) 设置 → 字体：face 打不开时不得写配置（坏路径会让下次翻页无声降级）
 reset_state()
-keys("Down", "Down", "Down", "Press",        -- 主菜单 → 设置
+keys("Down", "Down", "Down", "Down", "Press", -- 主菜单 → 设置（第 5 项）
      "Down", "Down", "Down", "Press",        -- 设置项 → 字体（第 4 项）
      "Press")                                -- 值选择 → 唯一候选
 font_fail[DEFAULT_FONT] = true
@@ -330,7 +341,7 @@ check(call_of("font_load") ~= nil, "选择时必须先在设备上开一次 face
 
 -- 3) 设置 → 字体：能打开则落盘，且菜单自身立即换面（这一屏就是预览）
 reset_state()
-keys("Down", "Down", "Down", "Press", "Down", "Down", "Down", "Press", "Press")
+keys("Down", "Down", "Down", "Down", "Press", "Down", "Down", "Down", "Press", "Press")
 ok, err = run_menu()
 check(ok, "字体切换应跑通，实得 " .. tostring(err))
 check(Config.load().font_path == DEFAULT_FONT,
@@ -346,7 +357,7 @@ check(after >= 2 and sizes:find("30", 1, true) and sizes:find("20", 1, true),
 -- 4) 设置 → 云端进度=关：阅读时一个云端请求都不发（说不同步就别联网）
 reset_state()
 reading_state()
-keys("Down", "Down", "Down", "Press",        -- 设置
+keys("Down", "Down", "Down", "Down", "Press", -- 设置（第 5 项）
      "Down", "Down", "Press",                -- 云端进度（第 3 项）→ 值选择
      "Down", "Press",                        -- 关
      "Back", "Back",                          -- 提示屏 + 退出设置
@@ -409,7 +420,7 @@ reading_state()
 sync_remote_ret = { chapter_uid = "u1", percent = 5 }
 sync_target_ret = { chapter_idx = 10, pos = 1, fraction = 0.1, title = "第1章" }
 sync_side, sync_why = "local", "same"
-keys("Down", "Down", "Press")
+keys("Down", "Down", "Down", "Press")       -- 同步进度 = 第 4 项
 ok, err = run_menu()
 check(ok, "同步进度入口应跑通，实得 " .. tostring(err))
 check(count_of("sync_remote") == 1,
@@ -418,6 +429,25 @@ txt = all_text()
 check(txt:find("已选择") == nil, "同步进度不得退化成「已选择」打印")
 check(txt:find("same") ~= nil, "手动同步必须回报判异结果，实得 " .. txt:sub(1, 200))
 Config.set("progress_sync", true)
+
+-- 7b) 「已下载」入口：中键进 Downloaded.browse（离线浏览，不触网）
+reset_state()
+keys("Down", "Down", "Press")               -- 第 3 项 → 已下载
+ok, err = run_menu()
+check(ok, "已下载入口应跑通，实得 " .. tostring(err))
+check(count_of("dl_browse") == 1, "中键已下载必须进 Downloaded.browse")
+
+-- 7c) 「运行状态」入口：状态屏（内存/堆/spool 占用/错误计数/app.log 尾部）
+reset_state()
+keys("Down", "Down", "Down", "Down", "Down", "Press", -- 第 6 项 → 运行状态
+     "Back")                                            -- 任意键返回 → 主菜单 Back 退出
+ok, err = run_menu()
+check(ok, "运行状态屏应跑通，实得 " .. tostring(err))
+txt = all_text()
+check(txt:find("运行状态", 1, true) ~= nil, "状态屏标题必须出现，实得 " .. txt:sub(1, 200))
+check(txt:find("已下载: 0 本 / 0 章", 1, true) ~= nil, "spool 占用必须来自 Download.list_books")
+check(txt:find("错误: 本次进程 0 / 累计 0", 1, true) ~= nil, "错误计数必须出现（Log.errors/累计）")
+check(txt:find("app.log 尾部", 1, true) ~= nil, "log 尾部段落必须出现")
 
 -- 8) 快捷菜单 → 下载全本：math.huge + 从第 1 章起；进度屏 3 秒限流；汇总来自 stats
 reset_state()

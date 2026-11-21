@@ -14,6 +14,8 @@ local Shelf = require("shelf")
 local Download = require("download")
 local Reader = require("reader")
 local Config = require("config")
+local Downloaded = require("downloaded")
+local Log = require("log")
 local Report = require("report")
 local Sync = require("sync")
 local Progress = require("progress")
@@ -26,9 +28,9 @@ local function build_items()
     if Api.has_login() then
         local auth = Api.load_auth()
         local name = tostring(auth.account.name or auth.account.user_vid or "已登录")
-        return { "继续阅读", "书架", "同步进度", "设置", "退出" }, name
+        return { "继续阅读", "书架", "已下载", "同步进度", "设置", "运行状态", "退出" }, name
     end
-    return { "登录", "书架(需登录)", "设置", "退出" }, nil
+    return { "登录", "书架(需登录)", "已下载", "设置", "运行状态", "退出" }, nil
 end
 
 local items, account_name = build_items()
@@ -299,9 +301,62 @@ local function cloud_position(book_id, chapters, cur_idx, page, force)
     return tgt.chapter_idx, { fraction = tgt.fraction }
 end
 
+-- 运行状态屏（用户口径：测试 log 反映实际加载占用与错误）。
+-- 内容：内存、Lua 堆、spool 占用、错误计数、app.log 尾部。任意键返回。
+local function status_screen(ft_main, ft_small)
+    local W, H = wr.fb_w(), wr.fb_h()
+    local mem = {}
+    local f = io.open("/proc/meminfo", "r")
+    if f then
+        for i = 1, 3 do mem[#mem + 1] = f:read("*l") or "" end
+        f:close()
+    end
+    local heap_kb = math.floor(collectgarbage("count"))
+    local books = Download.list_books()
+    local bytes, chs_down = 0, 0
+    for _, b in ipairs(books) do
+        bytes = bytes + (b.bytes or 0)
+        chs_down = chs_down + (b.chapters_down or 0)
+    end
+    local errs_total = Log.error_count()
+
+    wr.fb_fill(0, 0, W, H, 0x00)
+    local y = 20
+    local function row(s, small)
+        if small and ft_small then
+            wr.fb_text_ft(ft_small, 24, y, s, 0x40)
+        elseif ft_main then
+            wr.fb_text_ft(ft_main, 24, y, s, 0xFF)
+        else
+            wr.fb_text(24, y, s, 1, 0xFF)
+        end
+        y = y + (small and 30 or 44)
+    end
+    row("运行状态", false)
+    row(mem[1] or "", true)
+    row(mem[2] or "", true)
+    row(mem[3] or "", true)
+    row(string.format("Lua heap: %d KB", heap_kb), true)
+    row(string.format("已下载: %d 本 / %d 章 / %s",
+        #books, chs_down,
+        bytes >= 1024 * 1024 and string.format("%.1fMB", bytes / 1048576)
+            or string.format("%dKB", math.floor(bytes / 1024))), true)
+    row(string.format("错误: 本次进程 %d / 累计 %d", Log.errors, errs_total), true)
+    wr.fb_fill(16, y, W - 32, 2, 0xFF)
+    y = y + 10
+    row("app.log 尾部:", true)
+    for _, line in ipairs(Log.tail(8)) do
+        row(line ~= "" and line or " ", true)
+    end
+    row("任意键返回", true)
+    wr.fb_quant()
+    wr.fb_refresh(0)
+    while wr.input_poll(-1, true) == nil do end
+end
+
 -- 阅读主循环：全项目唯一的跨章决策点（reader 只报 action，不持有目录）。
 -- 每次离开一章就 Progress.set 落盘 → Back/Home/断电都能续读；Progress 单一写者就在这里。
-local function read_book(book_id, force_sync)
+local function read_book(book_id, force_sync, title_hint)
     local chapters, cerr = Download.fetch_catalog(book_id)
     if not chapters or #chapters == 0 then
         show("目录加载失败: " .. tostring(cerr):sub(1, 40), true)
@@ -309,6 +364,9 @@ local function read_book(book_id, force_sync)
     end
 
     local rec = Progress.get(book_id)
+    Download.save_manifest(book_id,
+        tostring(title_hint or (rec and rec.title) or book_id), chapters)
+    Log.info(string.format("catalog %s: %d chapters", book_id, #chapters))
     local cur_idx = (rec and rec.chapter_idx) or chapters[1].chapterIdx
     if not Download.find_chapter(chapters, cur_idx) then
         cur_idx = chapters[1].chapterIdx   -- 进度指向的章已不在目录（下架/改版）→ 从头读
@@ -457,19 +515,27 @@ if not SMOKE then
                 end
                 sel = 1
                 draw()
+            elseif items[sel] == "已下载" then
+                sel = 1
+                Downloaded.browse()
+                draw()
+            elseif items[sel] == "运行状态" then
+                sel = 1
+                status_screen(ft_main, ft_small)
+                draw()
             elseif items[sel] == "书架" then
                 sel = 1
                 local book_id = Shelf.run()
                 if book_id then
                     assert(wr.fb_open(), "fb_open failed")
-                    read_book(book_id)
+                    read_book(book_id, nil, (Progress.get(book_id) or {}).title)
                 end
                 draw()
             elseif items[sel] == "继续阅读" then
                 local last = Progress.get_last()
                 if last then
                     assert(wr.fb_open(), "fb_open failed")
-                    read_book(last)
+                    read_book(last, nil, (Progress.get(last) or {}).title)
                 else
                     show("暂无阅读记录")
                 end
@@ -480,7 +546,7 @@ if not SMOKE then
                 local last = Progress.get_last()
                 if last then
                     assert(wr.fb_open(), "fb_open failed")
-                    read_book(last, true)
+                    read_book(last, true, (Progress.get(last) or {}).title)
                 else
                     show("暂无阅读记录，无从同步")
                 end
