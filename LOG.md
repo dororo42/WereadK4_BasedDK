@@ -1,5 +1,36 @@
 # LOG — 动作日志（ub-mode）
 
+### 图片不显示根因修复（用户实证「新下载的书还是没有图片」）
+
+**取证**（真机 2026-11-23，探针在设备 /tmp，不入库）：`books/` 下 0 个 tar、0 张图；
+`data/imgcache` 里 CB_2H6B… 书 6 个章目录**只有 .done 没有图**，app.log 对应
+`assets CB_… ch1: 0 files 1196446B`；该书 gateway 目录 72 章 **0 个带 tar**，web
+`/web/book/chapterInfos` 返回 `errCode=-2012`；而正文 xhtml 的 `<img src>` 是
+`https://res.weread.qq.com/wrepub/CB_<book>_img03.jpg` 绝对 URL。
+
+**五处根因（逐条修 + 主机测钉住）**：
+1. `.done` 在解出 0 个成员时也照写 ⇒ 幂等探针把失败**永久固化**。改为只在成功时写，
+   且完备判据 = `.done` 在 **且** 目录真有图（化石目录 6/6 现在被判不完备，会重试）。
+2. `tar_entries` 与插件语义不一致：`^%z+`（头以 NUL 开头即当归档结束）、size 解析失败即
+   整包 break、不过滤目录项 ⇒ 一个坏头毁掉整包图。对齐插件（content.lua:195）。
+3. `ensure_chapter_assets` 只认 web `chapterInfos`，忽略目录记录里的 `chapter.tar`；
+   且 errCode 被静默当成"这本书没图"。改为 gateway tar 优先、web 回退（Referer=reader_url，
+   插件口径）、errCode 显式上抛。
+4. **缺整条远端图片通道**：无 tar 的书（CB_ 类）图片是 xhtml 里的绝对 URL。新增
+   `ensure_chapter_images`（宿主白名单 weread.qq.com/mmbiz.qpic.cn/mmbiz.qlogo.cn，
+   200 张/8MB 上限，幂等），由 `backfill_assets` 在 tar 通道失败后回退调用。
+5. **名字对不上**：标记名是 src 的 basename（带 `CB_<bookId>_` 前缀），落盘却被剥前缀 ⇒
+   图在盘上也渲染不出。reader 增加剥前缀候选；`html_text` 与 `image_urls_from_raw`
+   统一"取末段 + 去 query"（此前一侧带 query、一侧过 path_safe 把 `?` 换成 `_`）。
+
+**顺带修的结构缺陷**：`list_downloaded_chapters` 丢 `chapterUid` + `downloaded.lua` 打开章节
+不传 assets_dir ⇒「已下载」屏离线阅读的章**永远没图**；`ls -1 <path>/*.txt` 未加引号、
+路径分量未过滤（bookId/uid 来自服务端，会进 `os.execute`/`io.popen`）⇒ 统一 `path_safe`。
+
+**验证**：`lua5.1 tests/run.lua` → 26 套全绿（新增 `download_assets_test`）；
+`tools/mut-assets.sh` 13 条变异 **13/13 KILLED** + RESTORE-OK；全仓 luac 零错；
+设备侧 `ensure_chapter_images` 端到端 + reader 解码上屏（见下方设备实证行）。
+
 ### rt 未上报根因修复（用户实证驱动，取证→受控实验→语义修正）
 
 **用户报**：时长未上报。**取证链**：

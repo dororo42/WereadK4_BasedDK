@@ -213,8 +213,18 @@ end
 
 ------------------------------------------------------------------ spool
 
+-- 路径分量来自服务端（bookId / chapterUid）：既进 io.open，也进 os.execute 的单引号里
+-- （mkdir -p / rm -f）。只留 [%w%.%-_]，其余（' ; $ ` 空白 / 等）一律换成 '_'；
+-- 纯 "." / ".." 分量整体换成 '_' —— shell 注入与路径穿越由同一个护栏解决。
+local function path_safe(s)
+    local t = tostring(s or ""):gsub("[^%w%.%-_]", "_")
+    if t == "" or t == "." or t == ".." then t = "_" end
+    return t
+end
+Download._path_safe = path_safe
+
 local function spool_path(book_id, chapter_idx)
-    return string.format("%s/%s/%03d.txt", Download.SPOOL, tostring(book_id), chapter_idx)
+    return string.format("%s/%s/%03d.txt", Download.SPOOL, path_safe(book_id), chapter_idx)
 end
 
 -- 是否已有可用缓存（空文件不算：那是一次失败下载的残留，应当重下）。
@@ -271,11 +281,11 @@ end
 -- fetch_catalog 成功即全量写入（chapters 与 spool 解耦：manifest=目录，spool=已下正文）。
 
 local function manifest_path(book_id)
-    return Download.SPOOL .. "/" .. tostring(book_id) .. "/manifest.json"
+    return Download.SPOOL .. "/" .. path_safe(book_id) .. "/manifest.json"
 end
 
 function Download.save_manifest(book_id, title, chapters)
-    local dir = Download.SPOOL .. "/" .. tostring(book_id)
+    local dir = Download.SPOOL .. "/" .. path_safe(book_id)
     os.execute("mkdir -p '" .. dir .. "'")
     local list = {}
     for _, ch in ipairs(chapters or {}) do
@@ -348,11 +358,13 @@ function Download.list_downloaded_chapters(book_id)
     local m = Download.load_manifest(book_id)
     local by_idx = {}
     if m then
-        for _, ch in ipairs(m.chapters) do by_idx[tonumber(ch.chapterIdx)] = ch.title end
+        for _, ch in ipairs(m.chapters) do
+            by_idx[tonumber(ch.chapterIdx)] = { title = ch.title, chapterUid = ch.chapterUid }
+        end
     end
     local out = {}
-    local dp = Download.SPOOL .. "/" .. tostring(book_id)
-    local pp = io.popen("ls -1 " .. dp .. "/*.txt 2>/dev/null")
+    local dp = Download.SPOOL .. "/" .. path_safe(book_id)
+    local pp = io.popen("ls -1 '" .. dp .. "'/*.txt 2>/dev/null")
     if pp then
         for fn in pp:lines() do
             local idx = tonumber(fn:match("(%d+)%.txt$"))
@@ -361,9 +373,13 @@ function Download.list_downloaded_chapters(book_id)
                 if tf then
                     local text = tf:read("*a")
                     tf:close()
+                    local meta = by_idx[idx] or {}
                     out[#out + 1] = {
                         chapterIdx = idx,
-                        title = by_idx[idx] or ("第" .. idx .. "章"),
+                        title = meta.title or ("第" .. idx .. "章"),
+                        -- chapterUid 必须带出去：图片资产目录以 uid 为键，离线阅读要靠它
+                        -- 定位 asset_dir；少了它，「已下载」屏打开的章一律降级成 [图片]。
+                        chapterUid = meta.chapterUid,
                         text = text,
                     }
                 end
@@ -379,10 +395,15 @@ end
 
 -- 按 uid 存解码后的原始内容：epub 书 = xhtml（保结构保图标记）；
 -- txt 书 = 同正文文本。best-effort：写盘失败不影响阅读路径。
+local function raw_path(book_id, chapter_uid)
+    return string.format("%s/%s/xhtml/%s.xhtml",
+        Download.SPOOL, path_safe(book_id), path_safe(chapter_uid))
+end
+
 function Download.save_raw(book_id, chapter_uid, raw)
-    local dir = Download.SPOOL .. "/" .. tostring(book_id) .. "/xhtml"
-    os.execute("mkdir -p '" .. dir .. "'")
-    local f = io.open(dir .. "/" .. tostring(chapter_uid) .. ".xhtml", "w")
+    local path = raw_path(book_id, chapter_uid)
+    os.execute("mkdir -p '" .. path:match("^(.*)/[^/]+$") .. "'")
+    local f = io.open(path, "w")
     if not f then return false end
     f:write(raw or "")
     f:close()
@@ -390,8 +411,7 @@ function Download.save_raw(book_id, chapter_uid, raw)
 end
 
 function Download.read_raw(book_id, chapter_uid)
-    local f = io.open(Download.SPOOL .. "/" .. tostring(book_id) .. "/xhtml/"
-        .. tostring(chapter_uid) .. ".xhtml", "r")
+    local f = io.open(raw_path(book_id, chapter_uid), "r")
     if not f then return nil end
     local s = f:read("*a")
     f:close()
@@ -405,32 +425,58 @@ end
 -- tar = https://res.weread.qq.com/wrco/tar_CB_<bookId>_<chapterIdx>）。
 Download.ASSET_DIR = "/mnt/us/weread/data/imgcache"
 
--- 解析 tar（512B 头 POSIX ustar：name[100]，size 八进制@124，body 512 对齐）。
--- 只取常规文件；返回 { name=bytes }。插件 tar_entries 同款语义。
+-- 解析 tar（512B 头 POSIX ustar：name[100]，size 八进制@124，typeflag@156，body 512 对齐）。
+-- 只取有内容的常规文件；返回 { name=bytes }。语义与插件 tar_entries 对齐
+-- （weread_K4.koplugin/weread/lib/content.lua:195）——三处差异都曾让我们整包解出 0 个成员：
+--   · 结束判定是**整块全零**，不是"头以 NUL 开头"（空名成员会误判成归档结束）；
+--   · size 字段解析不出来按 0 处理并继续，不是整包 break（一个坏头不该毁掉后面的图）；
+--   · 目录项（typeflag '5'）与零长项不进结果。
+local function trim_tail_nulls(s) return (s:gsub("%z+$", "")) end
+
 local function tar_entries(data)
     local out = {}
     local offset = 1
-    while offset + 512 <= #data do
+    while offset + 511 <= #data do
         local hdr = data:sub(offset, offset + 511)
-        if hdr:match("^%z+") then break end           -- 两块全零 = 结束
-        local name = hdr:sub(1, 100):match("^([^%z]+)")
-        local size = tonumber(hdr:sub(125, 136):match("%z*(%x+)") or "", 8)
-        if not name or not size or size < 0 or offset + 512 + size > #data + 1 then break end
+        if hdr:match("^%z+$") then break end            -- 整块全零 = 归档结束
+        local name = trim_tail_nulls(hdr:sub(1, 100))
+        local size = tonumber(trim_tail_nulls(hdr:sub(125, 136)):gsub("%s", ""), 8) or 0
+        if size < 0 then break end                      -- 只有负 size 能让 offset 倒退
+        local typeflag = hdr:sub(157, 157)
         local body_start = offset + 512
-        out[#out + 1] = { name = name, data = data:sub(body_start, body_start + size - 1) }
+        if name ~= "" and size > 0
+            and (typeflag == "0" or typeflag == "" or typeflag == "\0") then
+            out[#out + 1] = { name = name, data = data:sub(body_start, body_start + size - 1) }
+        end
         offset = body_start + math.ceil(size / 512) * 512
     end
     return out
 end
 Download._tar_entries = tar_entries          -- 主机测试可注入
 
+-- 载荷不是 tar 时给出可定位的判定：真机取证里最贵的一种失败是
+-- "assets … 0 files 1196446B"——抓到了 1.2MB 却一个成员都没解出，日志里看不出载荷是什么。
+local function payload_verdict(body)
+    local b1, b2, b3, b4 = body:byte(1, 4)
+    if b1 == 0x1f and b2 == 0x8b then return "gzip(1f8b)" end
+    if body:sub(258, 262) == "ustar" then return "ustar-magic-ok" end
+    local head = body:sub(1, 24):gsub("[^\32-\126]", ".")
+    if head:match("^<") then return "html(" .. head .. ")" end
+    if head:match("^%{") then return "json(" .. head .. ")" end
+    return string.format("unknown(%02x%02x%02x%02x)", b1 or 0, b2 or 0, b3 or 0, b4 or 0)
+end
+Download._payload_verdict = payload_verdict
+
 local tar_map_cache = {}                      -- book_id -> { chapterIdx = tar_url }
 
 function Download.asset_dir(book_id, chapter_uid)
-    return string.format("%s/%s/%s", Download.ASSET_DIR, tostring(book_id), tostring(chapter_uid))
+    return string.format("%s/%s/%s", Download.ASSET_DIR, path_safe(book_id), path_safe(chapter_uid))
 end
 
 -- web chapterInfos → { chapterIdx = tar_url }（每书会话内缓存一次）。
+-- 只是**回退**：gateway 目录（fetch_catalog）里的 chapter.tar 优先，见 ensure_chapter_assets。
+-- 返回 map | nil, err —— errCode 必须说出来：静默返回空表会让调用方把"接口被拒"
+-- 误判成"这本书没有图"（真机 2026-11-22 取证：该接口返回 errCode=-2012）。
 function Download.fetch_tar_map(book_id)
     local cached = tar_map_cache[tostring(book_id)]
     if cached then return cached end
@@ -441,13 +487,20 @@ function Download.fetch_tar_map(book_id)
             ["User-Agent"] = WeRead.USER_AGENT,
             ["Content-Type"] = "application/json;charset=UTF-8",
             ["Origin"] = "https://weread.qq.com",
-            ["Referer"] = "https://weread.qq.com/",
+            -- 插件口径（content.lua:1465）：Referer = 本书 reader_url，不是裸站首页。
+            ["Referer"] = WeRead.reader_url(book_id),
             ["Cookie"] = Cookie.to_header(Api.load_auth().cookies or {}),
         },
         body = Json.encode({ bookIds = { tostring(book_id) } }),
         timeout = 30,
     })
     local data = body and Json.decode(body)
+    if type(data) == "table" then
+        local code = data.errCode or data.errcode
+        if code ~= nil and tostring(code) ~= "0" then
+            return nil, "chapterInfos errCode=" .. tostring(code)
+        end
+    end
     local map = {}
     if type(data) == "table" then
         for _, wrap in pairs(data) do
@@ -468,14 +521,36 @@ function Download.fetch_tar_map(book_id)
     return map
 end
 
--- 确保某章图片资产已解包落盘（幂等：目录非空跳过）。失败不致命——
--- 调用方（ensure_chapter）只记日志，reader 对缺图降级 [图片]。
-function Download.ensure_chapter_assets(book_id, chapter_uid, chapter_idx)
-    local dir = Download.asset_dir(book_id, chapter_uid)
+-- `.done` 只是"上次成功过"的记号。真机上有一批**化石目录**：旧实现解出 0 个成员也照写
+-- `.done`（app.log 实证 `assets CB_… ch1: 0 files 1196446B`），只看记号就等于永久放弃这些章。
+-- 故完备判据 = 记号在 **且** 目录里真有图；数不出来时保守当成完备（别反复重下）。
+local function assets_complete(dir)
     local probe = io.open(dir .. "/.done")
-    if probe then probe:close() return dir end
-    local tars = Download.fetch_tar_map(book_id)
-    local url = tars[tonumber(chapter_idx)]
+    if not probe then return false end
+    probe:close()
+    local pp = io.popen("ls -1a '" .. dir .. "' 2>/dev/null")
+    if not pp then return true end
+    local n = 0
+    for fn in pp:lines() do
+        if fn ~= "." and fn ~= ".." and fn ~= ".done" then n = n + 1 end
+    end
+    pp:close()
+    return n > 0
+end
+Download._assets_complete = assets_complete
+
+-- 确保某章图片资产已解包落盘（幂等：只在**成功**后写 .done）。失败不致命——
+-- 调用方只记日志，reader 对缺图降级 [图片]。
+-- tar_url 由调用方从目录记录（gateway 的 chapter.tar）带入；缺失才回退 web chapterInfos。
+function Download.ensure_chapter_assets(book_id, chapter_uid, chapter_idx, tar_url)
+    local dir = Download.asset_dir(book_id, chapter_uid)
+    if assets_complete(dir) then return dir end
+    local url = tar_url
+    if not url or url == "" then
+        local tars, terr = Download.fetch_tar_map(book_id)
+        if not tars then return nil, terr end
+        url = tars[tonumber(chapter_idx)]
+    end
     if not url then return nil, "no tar" end
     local auth = Api.load_auth()
     -- res.weread.qq.com 会 302 到 CDN（真机实证），传输层不跟随 → 手动跟（≤3 跳）
@@ -505,25 +580,134 @@ function Download.ensure_chapter_assets(book_id, chapter_uid, chapter_idx)
             tostring(status), body and tostring(#body) or "empty"))
         return nil, "tar fetch failed"
     end
+    local entries = tar_entries(body)
+    if #entries == 0 then
+        -- 不写 .done：0 成员是**失败**，不是"这章没图"。写了 .done，幂等探针就把失败
+        -- 永久固化——重下、重开都不再试（真机实证：CB_ 书 6 章全部 "0 files" 后再没恢复）。
+        local verdict = payload_verdict(body)
+        Log.error(string.format("tar parse %s ch%d: 0 entries in %dB payload=%s",
+            tostring(book_id), tonumber(chapter_idx) or 0, #body, verdict))
+        return nil, "tar parsed 0 entries (" .. verdict .. ")"
+    end
     os.execute("mkdir -p '" .. dir .. "'")
-    for _, e in ipairs(tar_entries(body)) do
+    local prefix = "CB_" .. tostring(book_id) .. "_"
+    local written = 0
+    for _, e in ipairs(entries) do
         local name = e.name:match("([^/]+)$")     -- ../Images/x.png → x.png
-        -- tar 成员名带 CB_<bookId>_ 前缀（真机实证 CB_3300057890_note.png），
-        -- 而正文 xhtml 的 src 是裸 basename（note.png）→ 剥前缀对齐
-        local stripped = name:match("^CB_%d+_(.+)$")
-        if stripped then name = stripped end
-        if name and name ~= "" and e.name:match("/$") == nil then
-            local f = io.open(dir .. "/" .. name, "wb")
-            if f then f:write(e.data) f:close() end
+        -- tar 成员名带 CB_<bookId>_ 前缀（真机实证 CB_3300057890_note.png），而正文 xhtml
+        -- 的 src 是裸 basename（note.png）→ 剥前缀对齐。bookId 本身可能不是纯数字
+        -- （CB_2H6B… 这类），所以按实际 bookId 精确剥，数字式再用通配兜底。
+        if name:sub(1, #prefix) == prefix then
+            name = name:sub(#prefix + 1)
+        else
+            local stripped = name:match("^CB_%d+_(.+)$")
+            if stripped then name = stripped end
+        end
+        if name and name ~= "" then
+            local f = io.open(dir .. "/" .. path_safe(name), "wb")
+            if f then f:write(e.data) f:close() written = written + 1 end
         end
     end
+    if written == 0 then return nil, "no writable file in tar" end
     local done = io.open(dir .. "/.done", "w")
     if done then done:write("1") done:close() end
-    local n = 0
-    local pp = io.popen("ls -1 '" .. dir .. "' | grep -vc '.done'")
-    if pp then n = tonumber(pp:read("*l") or 0) or 0 pp:close() end
-    Log.info(string.format("assets %s ch%d: %d files %dB", book_id, chapter_idx, n, #body))
+    Log.info(string.format("assets %s ch%d: %d files %dB",
+        tostring(book_id), tonumber(chapter_idx) or 0, written, #body))
     return dir
+end
+
+------------------------------------------------------------------ 无 tar 时的远端图片通道
+
+-- 正文 xhtml 里的 <img src> 常是**绝对 URL**（真机实证 2026-11-23：CB_2H6B… 书 72 章
+-- gateway 全无 tar、web chapterInfos 又返回 errCode=-2012，而 src 是
+-- https://res.weread.qq.com/wrepub/CB_<book>_img03.jpg）。这类书没有 tar 可解，只能按 URL
+-- 逐张取——插件 content.lua:1215 download_remote_images 的同款通道。
+-- 宿主白名单是安全边界：没有它，一本被投毒的书就能把阅读器变成任意地址抓取器。
+Download.TRUSTED_IMAGE_HOSTS = { "weread.qq.com", "mmbiz.qpic.cn", "mmbiz.qlogo.cn" }
+Download.MAX_CHAPTER_IMAGES = 200               -- 插件同款上限（256MB 设备防 OOM）
+Download.MAX_IMAGE_BYTES = 8 * 1024 * 1024
+
+function Download.trusted_image_url(src)
+    local url = tostring(src or "")
+    if url:match("^//") then url = "https:" .. url end
+    local host = url:match("^https?://([^/]+)")
+    if not host then return nil end
+    host = host:lower():gsub(":%d+$", "")
+    for _, suffix in ipairs(Download.TRUSTED_IMAGE_HOSTS) do
+        if host == suffix or host:sub(-(#suffix + 1)) == "." .. suffix then return url end
+    end
+    return nil
+end
+
+-- xhtml → { 标记名 = url }。键必须与 html_text 的标记同源（src 的 basename、去 query），
+-- 否则 reader 按标记找文件永远找不到——这正是"图在盘上却不显示"的一种成因。
+function Download.image_urls_from_raw(raw)
+    local out = {}
+    for src in tostring(raw or ""):gmatch('<%s*img[^>]-src%s*=%s*"([^"]+)"') do
+        local url = Download.trusted_image_url(src)
+        if url then
+            local base = tostring(src):match("([^/]+)$")
+            local name = base and base:match("^[^?]+")   -- 与 html_text 的标记同源（去 query）
+            if name and name ~= "" then out[path_safe(name)] = url end
+        end
+    end
+    return out
+end
+
+-- 按 URL 补齐本章图片。幂等：已落盘的不重取；一张都没取到就不写 .done（失败不得固化）。
+function Download.ensure_chapter_images(book_id, chapter_uid)
+    local dir = Download.asset_dir(book_id, chapter_uid)
+    local raw = Download.read_raw(book_id, chapter_uid)
+    if not raw then return nil, "no raw xhtml" end
+    local urls = Download.image_urls_from_raw(raw)
+    local fetched, cached = 0, 0
+    for name, url in pairs(urls) do
+        local path = dir .. "/" .. name
+        local probe = io.open(path, "rb")
+        if probe then
+            probe:close()
+            cached = cached + 1
+        elseif fetched < Download.MAX_CHAPTER_IMAGES then
+            local body, status = wr.http_req({
+                url = url,
+                method = "GET",
+                headers = {
+                    ["User-Agent"] = WeRead.USER_AGENT,
+                    ["Referer"] = WeRead.reader_url(book_id, chapter_uid),
+                },
+                timeout = 30,
+            })
+            local code = tonumber(status)
+            if body and #body > 0 and #body <= Download.MAX_IMAGE_BYTES
+                and (not code or (code >= 200 and code < 300)) then
+                os.execute("mkdir -p '" .. dir .. "'")
+                local f = io.open(path, "wb")
+                if f then f:write(body) f:close() fetched = fetched + 1 end
+            end
+        end
+    end
+    if fetched == 0 and cached == 0 then return nil, "no trusted image url" end
+    if fetched > 0 then
+        local done = io.open(dir .. "/.done", "w")
+        if done then done:write("1") done:close() end
+    end
+    Log.info(string.format("images %s: fetched=%d cached=%d",
+        tostring(book_id), fetched, cached))
+    return dir
+end
+
+-- 正文里带图标记（\1IMG:）却缺资产 → 补一次。已 spool 的章也要走这里：
+-- 早于图片功能落盘的书，重下时被 is_spooled 跳过、打开时被缓存早退跳过，
+-- 于是没有任何路径能补图（用户实证「新下载的书还是没有图片」的另一半成因）。
+-- 两条通道按序试：chapter.tar（gateway/web 给 URL）→ 正文 xhtml 里的绝对 URL。
+local function backfill_assets(book_id, ch, text)
+    if not ch or not text or not text:find("\1IMG:") then return end
+    local dir, aerr = Download.ensure_chapter_assets(
+        book_id, ch.chapterUid, ch.chapterIdx, ch.tar)
+    if dir then return end
+    local _, ierr = Download.ensure_chapter_images(book_id, ch.chapterUid)
+    Log.info(string.format("assets ch%s: %s / images: %s",
+        tostring(ch.chapterIdx), tostring(aerr), tostring(ierr)))
 end
 
 ------------------------------------------------------------------ 删除（已下载管理）
@@ -581,6 +765,7 @@ end
 function Download.ensure_chapter(book_id, chapters, chapter_idx, sess)
     local cached = Download.read_chapter(book_id, chapter_idx)
     if cached and #cached > 0 then
+        backfill_assets(book_id, Download.find_chapter(chapters, chapter_idx), cached)
         return cached
     end
     local ch = Download.find_chapter(chapters, chapter_idx)
@@ -600,12 +785,7 @@ function Download.ensure_chapter(book_id, chapters, chapter_idx, sess)
     end
     Log.info(string.format("download %s ch%d bytes=%d %ds",
         book_id, ch.chapterIdx, #text, os.time() - t0))
-    if text:find("\1IMG:") then
-        -- 章内有图：确保 tar 资产解包（失败只留 [图片] 占位，不拦正文）
-        local aerr
-        _, aerr = Download.ensure_chapter_assets(book_id, ch.chapterUid, ch.chapterIdx)
-        if aerr then Log.info("assets unavailable ch" .. ch.chapterIdx .. ": " .. aerr) end
-    end
+    backfill_assets(book_id, ch, text)   -- 章内有图：确保 tar 资产解包（失败只留 [图片] 占位）
     local path, serr = Download.save_chapter(book_id, ch.chapterIdx, ch.title, text)
     if not path then
         return nil, serr
@@ -633,6 +813,9 @@ function Download.book(book_id, max_chapters, start_pos, on_progress)
         local ch = chapters[i]
         if Download.is_spooled(book_id, ch.chapterIdx) then
             ch._err = nil
+            -- 已 spool ≠ 已完备：图片资产可能从没抓过（或上次抓失败后没留 .done），
+            -- 重下全本正是补图的机会——否则老书永远没图。
+            backfill_assets(book_id, ch, Download.read_chapter(book_id, ch.chapterIdx))
         else
             local text, terr = Download.ensure_chapter(book_id, chapters, ch.chapterIdx, sess)
             ch._err = text and nil or terr

@@ -300,7 +300,9 @@ function DL.browse()
                         local rec = Progress.get(book.bookId)
                         local page = (rec and rec.chapter_idx == c.chapterIdx and rec.page) or 1
                         Log.info(string.format("offline open: %s ch%d", book.bookId, c.chapterIdx))
-                        Reader.open(c.text, c.title, page)
+                        -- 资产目录以 chapterUid 为键：不传它，离线打开的章永远没有图片
+                        Reader.open(c.text, c.title, page,
+                            c.chapterUid and Download.asset_dir(book.bookId, c.chapterUid) or nil)
                     end
                 end
             end

@@ -27,6 +27,7 @@ local suites = {
     "shelf_recent_test",
     "fonts_test",
     "download_batch_test",
+    "download_assets_test",
     "sync_test",
     "shelf_ui_test",
     "reader_layout_test",

@@ -36,7 +36,10 @@ function HtmlText.to_text(xhtml)
     -- 由 reader 用章资产目录（chapter.tar 解包）解析；解析不到降级 [图片]。
     -- [&amp; 实体此时还没解码，不影响 basename 取尾段]
     s = s:gsub('<%s*img[^>]-src%s*=%s*"([^"]+)"[^>]*>', function(src)
-        local name = tostring(src):match("([^/]+)%??[^/]*$")
+        -- 标记名 = src 最后一段且**去 query**：落盘文件名由 Download.image_urls_from_raw
+        -- 用同一套推导（还要过 path_safe，'?' 会变成 '_'）。两侧不一致就等于图永远找不到。
+        local base = tostring(src):match("([^/]+)$")
+        local name = base and base:match("^[^?]+")
         if not name or name == "" then return "\n[图片]\n" end
         return "\n\1IMG:" .. name .. "\1\n"
     end)

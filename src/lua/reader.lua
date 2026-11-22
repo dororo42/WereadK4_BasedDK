@@ -196,16 +196,30 @@ end
 Reader._img_cache = {}
 Reader._rows_per_page = nil
 function Reader.load_image_block(assets_dir, name, maxw, lh)
-    local path = assets_dir .. "/" .. tostring(name)
-    local cached = Reader._img_cache[path]
+    local nm = tostring(name)
+    local key = assets_dir .. "/" .. nm     -- 缓存键固定用标记名：解析到哪都只算一次
+    local cached = Reader._img_cache[key]
     if cached ~= nil then return cached or nil end
+    local path = key
     local f = io.open(path, "rb")
     if not f then
-        -- 前缀残留兜底：解包文件可能仍带 CB_<book>_ 前缀（解析顺序变化时）
+        -- 标记名 = src 的 basename，常带 CB_<bookId>_ 前缀（真机实证
+        -- CB_3300057890_device_phone_frontcover.jpg），而落盘文件可能被剥过前缀
+        -- → 两个方向都要试，否则就是"图在盘上却渲染不出"。
+        local stripped = nm:match("^CB_[^_]+_(.+)$")
+        if stripped then
+            local alt = assets_dir .. "/" .. stripped
+            local af = io.open(alt, "rb")
+            if af then f, path = af, alt end
+        end
+    end
+    if not f then
+        -- 目录扫描兜底：文件名比标记长（仍带前缀）也能对上
         local pp = io.popen("ls -1 '" .. assets_dir .. "' 2>/dev/null")
         if pp then
+            local esc = nm:gsub("([%.%[%]%%])", "%%%1")
             for fn in pp:lines() do
-                if fn == tostring(name) or fn:match("[_/]" .. tostring(name):gsub("([%.%[%]%%])", "%%%1") .. "$") then
+                if fn == nm or fn:match("[_/]" .. esc .. "$") then
                     path = assets_dir .. "/" .. fn
                     f = io.open(path, "rb")
                     break
@@ -214,19 +228,19 @@ function Reader.load_image_block(assets_dir, name, maxw, lh)
             pp:close()
         end
     end
-    if not f then Reader._img_cache[path] = false return nil end
+    if not f then Reader._img_cache[key] = false return nil end
     local data = f:read("*a")
     f:close()
     local gray, w, h = wr.image_decode(data)   -- C 绑定返回序：gray, w, h
-    if not gray or not w or w <= 0 or h <= 0 then Reader._img_cache[path] = false return nil end
+    if not gray or not w or w <= 0 or h <= 0 then Reader._img_cache[key] = false return nil end
     -- 等比缩放到 maxw 内（最近邻点采样，C 层做——Lua 拼 60 万 string.char 参数会爆栈）
     local dw = math.min(maxw, w)
     local dh = math.max(1, math.floor(h * (dw / w) + 0.5))
     gray = wr.image_scale(gray, w, h, dw, dh)
-    if not gray then Reader._img_cache[path] = false return nil end
+    if not gray then Reader._img_cache[key] = false return nil end
     local blk = { w = dw, h = dh, gray = gray, total = 0 }
     blk.total = math.ceil(blk.h / (lh or 34)) + 1
-    Reader._img_cache[path] = blk
+    Reader._img_cache[key] = blk
     return blk
 end
 
