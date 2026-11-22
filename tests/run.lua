@@ -13,6 +13,7 @@ local suites = {
     "renew_test",
     "report_position_test",
     "report_retry_test",
+    "clock_test",
     "position_golden_test",
     "api_jar_test",
     "crypto_test",

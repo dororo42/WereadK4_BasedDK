@@ -109,6 +109,44 @@ function Reader.wrap_line(measure, maxw, line)
     return rows
 end
 
+-- 阅读时长钟（isword weread_ui "dwell limit" 语义的纯函数实现，主机可测）：
+-- 秒数只在「活动窗口」内累计——两次交互间隔 ≤ DWELL_LIMIT_S 才计（翻页/按键
+-- = 活动），静默超限的间隙不计。这正是"在线阅读多少报多少"：开着不翻页
+-- 不计时，不靠墙钟不靠定时器。毫秒入口由调用方喂（设备 wr.millis/主机测试桩）。
+Reader.DWELL_LIMIT_S = 90
+function Reader.new_clock()
+    return { acc_ms = 0, last = nil }
+end
+-- 每次交互（任意键）调用：校验上一窗口是否落在 dwell 内
+function Reader.clock_activity(clk, now_ms)
+    if clk.last == nil then clk.last = now_ms; return end
+    local dt = now_ms - clk.last
+    clk.last = now_ms
+    if dt > 0 and dt <= Reader.DWELL_LIMIT_S * 1000 then
+        clk.acc_ms = clk.acc_ms + dt
+    end
+end
+-- 翻页后取走满 30s 的整块（服务端对 >30s 的 rt 静默丢弃——插件/真机判据）。
+-- 单次最多排空 3 块（90s）：翻页间隙慢于 30s 时的积压，在渲染完的页面上
+-- 消化（不挡当页显示，只延后下一次按键的响应）。
+function Reader.clock_take(clk, now_ms)
+    if clk.last ~= nil then
+        local dt = now_ms - clk.last
+        clk.last = now_ms
+        if dt > 0 and dt <= Reader.DWELL_LIMIT_S * 1000 then
+            clk.acc_ms = clk.acc_ms + dt
+        end
+    end
+    local full = math.floor(clk.acc_ms / 30000)
+    local n = math.min(full, 3)
+    if n > 0 then clk.acc_ms = clk.acc_ms - n * 30000 end
+    return n * 30
+end
+-- 离章余量（< 翻页间隔+dwell；由调用方分片连发）
+function Reader.clock_remainder_s(clk)
+    return math.floor(clk.acc_ms / 1000)
+end
+
 -- 章节 → 屏幕行数组（段落间空行；assets_dir 非空时解析 IMG 标记为图片块）。
 -- 行元素 = 字符串 | 图片块表 { img_w, img_h, img_gray, slot, total, top_pad }：
 -- 图片块占 total 个行槽（含顶部对齐余量），分页切片天然把整块切进同一页——
@@ -195,7 +233,8 @@ end
 -- start_page: 起始页（1 起）；传负数表示「从末页开始」——上一章回退时用；
 -- 传 { fraction = 0..1 } 表示按比例定位——云端进度跳转时用（总页数只有本模块
 -- 排版后才算得出，调用方给不了页码，只给得了比例；两解都传时以 fraction 为准）。
-function Reader.open(chapter_text, chapter_title, start_page, assets_dir)
+function Reader.open(chapter_text, chapter_title, start_page, assets_dir, opts)
+    opts = opts or {}
     assert(wr.fb_open(), "fb_open failed")
     assert(wr.input_open(), "input_open failed")
     local fs = font_size()
@@ -247,15 +286,29 @@ function Reader.open(chapter_text, chapter_title, start_page, assets_dir)
         wr.fb_refresh(0)
     end
 
+    -- 时长排水：翻页渲染完成（页面已可见）后发已满 30s 的整块；失败即弃
+    -- （在线口径，无离线积压），不挡当页显示。
+    local clk = Reader.new_clock()
+    Reader.clock_activity(clk, wr.millis())
+    local function drain(page)
+        local chunk = Reader.clock_take(clk, wr.millis())
+        if chunk >= 30 and opts.on_tick then
+            local okt, terr = pcall(opts.on_tick, page, total_pages, chunk)
+            if not okt then Log.info("rt tick error: " .. tostring(terr)) end
+        end
+    end
+
     draw()
     local action
     while true do
         local key = wr.input_poll(1000, true)
+        if key then Reader.clock_activity(clk, wr.millis()) end
         -- 未绑定的键（含 ScreenKB 自身、其它组合键）静默忽略；nil = 超时
         if key and Reader.KEY_NEXT_PAGE[key] then
             if page < total_pages then
                 page = page + 1
                 draw()
+                drain(page)
             else
                 action = "next_chapter"   -- 章末再往前翻 → 自动续读
                 break
@@ -264,6 +317,7 @@ function Reader.open(chapter_text, chapter_title, start_page, assets_dir)
             if page > 1 then
                 page = page - 1
                 draw()
+                drain(page)
             else
                 action = "prev_chapter"   -- 首页再往后翻 → 回上一章（调用方决定停在末页）
                 break
@@ -286,9 +340,12 @@ function Reader.open(chapter_text, chapter_title, start_page, assets_dir)
         end
     end
 
+    -- 离章余量（<90s 活动窗口 + <30s 排水残量；menu 分片连发）
+    local reading_seconds = Reader.clock_remainder_s(clk)
     wr.font_close(ft)
     -- fb/input 不在此关闭：menu 级联共享（调用方管理生命周期）
-    return { page = page, total_pages = total_pages, action = action }
+    return { page = page, total_pages = total_pages, action = action,
+        reading_seconds = reading_seconds }
 end
 
 return Reader

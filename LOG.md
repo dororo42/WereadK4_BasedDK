@@ -1,5 +1,34 @@
 # LOG — 动作日志（ub-mode）
 
+### rt 活动量计时上报实施（用户拍板：不搞补报节奏，在线读多少报多少）
+
+**架构（isword dwell 语义 + 服务端 30s 线的折中）**：
+1. `reader.lua` 活动量钟（纯函数 Reader.new_clock/clock_activity/clock_take/
+   clock_remainder_s，主机可测）：秒数只在「活动窗口」累计——两次交互间隔
+   ≤ DWELL_LIMIT_S=90s 才计（任意键=活动）；静默超限的间隙不计（开着不翻页
+   不计时）。**排水点在翻页渲染完成之后**（页面已可见，不挡显示只延后下次
+   按键响应）：每次翻页排走已满 30s 的整块（≤3 块/次=90s 封顶），经
+   opts.on_tick 回调由 menu 发 Report.send。离章余量（<120s 有界）随 ret
+   返回。
+2. `report.lua` send_reading：离章余量按 ≤30s 分片、同一位置连发（每片位置
+   重算），≤4 片封顶（覆盖余量上界 120s）；**失败即停**（在线口径无重试
+   积压）。
+3. `menu.read_book`：on_tick 闭包（rt tick 失败 Log 即弃）；离章
+   Report.send_reading 替代原墙钟单报（os.time()-t_open 移除）。
+
+**语义对照**：插件 30s 心跳=定时器+水印补报（用户否了）；本项目新版=
+活动驱动排水（无定时器）+离章一次连发（无跨会话积压）；isword 同款
+dwell 语义（二进制取证）。真实阅读 N 分钟 → 服务端记 ~N 分钟（±dwell 粒度）；
+静默挂着不计；断网时段不计不补。
+
+**测试**：clock_test 新建 6 断言（窗口累计/静默超限不计/排空 3 块封顶/
+余量有界/首次活动）；report_retry_test 补 send_reading 3 断言（75s=30/30/15、
+首片失败即停、0 秒不发）；**25 套全绿**。桩隔离再现：clock_test 先存后装
+（存成桩=污染 config_test）。
+
+### 部署 pending：设备休眠掉线（两次重试未回）——上线后 deploy-weread.sh。
+
+
 ### isword 0.3.9 上报机制核实（用户口径：不搞补报节奏，在线读多少报多少）
 
 **取证面**：备份 tar 里的闭源二进制 bin/kindle{hf,pw2}/weread_ui（9.6MB 静态

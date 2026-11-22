@@ -170,4 +170,31 @@ function Report.send(opts)
     return nil, "errCode=" .. tostring(code) .. " status=" .. tostring(status)
 end
 
+-- 离章余量连发：把一段真实阅读时长按 ≤MAX_SINGLE_SECONDS 分片、同一位置
+-- 连发（无定时器无跨会话积压；分片 ≤4 = 120s 封顶——dwell 语义下离章余量
+-- 上界 = 排水残量 30s + 活动窗口 90s，正常 1-3 片）。位置每片重算（页码
+-- 可能在阅读中推进过）。
+-- opts 同 send；返回 sent（成功片数）| nil, err
+function Report.send_reading(opts, total_seconds)
+    local secs = math.max(0, math.floor(tonumber(total_seconds) or 0))
+    local sent, last_err = 0, nil
+    while secs > 0 and sent < 4 do
+        local chunk = math.min(Report.MAX_SINGLE_SECONDS, secs)
+        local o = {}
+        for k, v in pairs(opts) do o[k] = v end
+        o.elapsed_seconds = chunk
+        local res, err = Report.send(o)
+        if not res then
+            last_err = err
+            break
+        end
+        sent = sent + 1
+        secs = secs - chunk
+    end
+    if sent == 0 and secs > 0 then
+        return nil, last_err or "no chunks sent"
+    end
+    return sent
+end
+
 return Report

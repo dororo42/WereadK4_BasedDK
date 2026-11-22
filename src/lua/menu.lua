@@ -418,23 +418,35 @@ local function read_book(book_id, force_sync, title_hint)
             return
         end
 
-        local t_open = os.time()
         -- page 要么是整数页码（1 起，负数=末页），要么是 {fraction=0..1}
         -- （云端跳转：页数只有 reader 自己算得出，调用方只能给比例）
-        local ret = Reader.open(body, ch.title, page, Download.asset_dir(book_id, ch.chapterUid))
+        -- 时长 tick（isword 活动量口径）：翻页渲染后由 reader 排水调用，
+        -- 每片 ≤30s（服务端对大 rt 静默丢弃），失败即弃——在线口径，无积压。
+        local function on_tick(page, total_pages, seconds)
+            local res, rerr = Report.send({
+                book_id = book_id, chapters = chapters, chapter_idx = cur_idx,
+                page = page, total_pages = total_pages,
+                psvts = sess.psvts, pclts = sess.pclts, token = sess.token,
+                elapsed_seconds = seconds,
+            })
+            if not res then
+                Log.info("rt tick dropped: " .. tostring(rerr))
+            end
+        end
+        local ret = Reader.open(body, ch.title, page, Download.asset_dir(book_id, ch.chapterUid),
+            { on_tick = on_tick })
         if not ret then
             show("阅读器打开失败", true)
             return
         end
         Progress.set(book_id, cur_idx, ret.page, ch.title, ret.total_pages)
-        -- 服务端同步（DK-3.5）：位置随阅读时长一起上报，一章一次。失败不打扰阅读——
-        -- 本地进度已落盘，丢的只是一次服务器同步，下次离开该章还会再报。
-        Report.send({
+        -- 离章：位置随余量时长分片连发（≤30s×4，无定时器）。失败不打扰阅读——
+        -- 本地进度已落盘，位置下次离开该章还会再报；在线口径时长即弃。
+        Report.send_reading({
             book_id = book_id, chapters = chapters, chapter_idx = cur_idx,
             page = ret.page, total_pages = ret.total_pages,
             psvts = sess.psvts, pclts = sess.pclts, token = sess.token,
-            elapsed_seconds = os.time() - t_open,
-        })
+        }, ret.reading_seconds)
 
         local pos = Download.chapter_pos(chapters, cur_idx)
         if ret.action == "next_chapter" then

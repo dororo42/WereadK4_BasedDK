@@ -213,6 +213,7 @@ stub("progress", {
     end,
 })
 stub("report", {
+    send_reading = function(_o, secs) return math.ceil((secs or 0) / 30) end,
     send = function(o)
         calls[#calls + 1] = { f = "report_send", idx = o.chapter_idx, page = o.page }
         return { accepted = true, percent = 63 }
