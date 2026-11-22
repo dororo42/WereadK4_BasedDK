@@ -75,13 +75,19 @@ local requests = {}
 local tar_body, tar_status = nil, 200
 local infos_body = nil
 local img_body = nil
+local img_redirect = nil          -- 非 nil 时：res.weread 首跳返回 302 + 该 Location
 
 wr = {
     http_req = function(opts)
         requests[#requests + 1] = opts
         local u = tostring(opts.url)
         if u:find("chapterInfos", 1, true) then return infos_body, 200, {} end
-        if u:find("res.weread", 1, true) then return img_body, 200, {} end
+        if u:find("res.weread", 1, true) and img_redirect then
+            return nil, 302, { location = img_redirect }
+        end
+        if u:find("res.weread", 1, true) or u:find("tencent-cloud", 1, true) then
+            return img_body, 200, {}
+        end
         return tar_body, tar_status, {}
     end,
 }
@@ -92,6 +98,7 @@ local function reset()
     tar_body, tar_status = nil, 200
     infos_body = nil
     img_body = nil
+    img_redirect = nil
 end
 
 local function count_of(pattern)
@@ -339,6 +346,21 @@ reset()
 img_body = "IMGBYTES"
 Download.ensure_chapter_images(BOOK7, "w1")
 check(#requests == 0, "已落盘的图不应重取，实发 " .. #requests)
+
+-- 7e) 必须跟 302：src 指向 res.weread.qq.com，真身在腾讯 CDN（真机实证 2026-11-23）。
+-- 漏跟的表现是"拿到 0 字节"而不是报错 → 静默变成"这本书没图"。
+reset()
+local BOOK8 = "9008"
+Download.save_raw(BOOK8, "w8", '<img src="https://res.weread.qq.com/wrepub/CB_9008_img09.jpg"/>')
+img_redirect = "https://wrco-40036.sh.gfp.tencent-cloud.com/9008/img09.jpg?sign=abc"
+img_body = "CDNBODY"
+local d8, e8 = Download.ensure_chapter_images(BOOK8, "w8")
+check(d8 == Download.asset_dir(BOOK8, "w8"),
+    "跟跳转后应取到图，实得 " .. tostring(d8) .. " / " .. tostring(e8))
+check(#requests == 2, "应发两次请求（302 + CDN 200），实发 " .. #requests)
+local f8 = io.open(d8 .. "/CB_9008_img09.jpg", "rb")
+check(f8 ~= nil, "CDN 取回的图应按标记名落盘")
+if f8 then check(f8:read("*a") == "CDNBODY", "内容应为 CDN 响应体") f8:close() end
 
 ---------------------------------------------------------------- 收尾
 

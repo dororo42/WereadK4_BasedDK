@@ -539,6 +539,37 @@ local function assets_complete(dir)
 end
 Download._assets_complete = assets_complete
 
+-- 带跳转的 GET：res.weread.qq.com 会 302 到腾讯 CDN（真机实证 2026-11-23：
+-- location=https://wrco-40036.sh.gfp.tencent-cloud.com/<book>/img09.jpg?sign=…），
+-- 而传输层不跟随（net.c 的 http_req 没设 FOLLOWLOCATION）→ 手动跟 ≤3 跳。
+-- tar 与远端图片两条通道**共用这一个实现**：漏跟跳转的表现是"拿到 0 字节"而不是报错，
+-- 最容易静默退化成"这本书没图"（本轮就是这么漏的）。
+local function http_get_follow(url, referer, timeout)
+    local auth = Api.load_auth()
+    local body, status
+    for _ = 1, 3 do
+        local headers
+        body, status, headers = wr.http_req({
+            url = url,
+            method = "GET",
+            headers = {
+                ["User-Agent"] = WeRead.USER_AGENT,
+                ["Referer"] = referer,
+                ["Cookie"] = Cookie.to_header(auth.cookies or {}),
+            },
+            timeout = timeout or 60,
+        })
+        local code = tonumber(status)
+        if not (code and code >= 300 and code < 400) then break end
+        local loc = headers and (headers["location"] or headers["Location"])
+        if not loc or loc == "" then break end
+        url = loc:match("^//") and ("https:" .. loc)
+            or (loc:match("^/") and ("https://weread.qq.com" .. loc) or loc)
+    end
+    return body, status
+end
+Download._http_get_follow = http_get_follow
+
 -- 确保某章图片资产已解包落盘（幂等：只在**成功**后写 .done）。失败不致命——
 -- 调用方只记日志，reader 对缺图降级 [图片]。
 -- tar_url 由调用方从目录记录（gateway 的 chapter.tar）带入；缺失才回退 web chapterInfos。
@@ -552,29 +583,7 @@ function Download.ensure_chapter_assets(book_id, chapter_uid, chapter_idx, tar_u
         url = tars[tonumber(chapter_idx)]
     end
     if not url then return nil, "no tar" end
-    local auth = Api.load_auth()
-    -- res.weread.qq.com 会 302 到 CDN（真机实证），传输层不跟随 → 手动跟（≤3 跳）
-    local body, status, headers
-    for _ = 1, 3 do
-        body, status, headers = wr.http_req({
-            url = url,
-            method = "GET",
-            headers = {
-                ["User-Agent"] = WeRead.USER_AGENT,
-                ["Referer"] = WeRead.reader_url(book_id, chapter_uid),
-                ["Cookie"] = Cookie.to_header(auth.cookies or {}),
-            },
-            timeout = 60,
-        })
-        if status and tonumber(status) >= 300 and tonumber(status) < 400 then
-            local loc = headers and (headers["location"] or headers["Location"])
-            if not loc or loc == "" then break end
-            url = loc:match("^//") and ("https:" .. loc)
-                or (loc:match("^/") and ("https://weread.qq.com" .. loc) or loc)
-        else
-            break
-        end
-    end
+    local body, status = http_get_follow(url, WeRead.reader_url(book_id, chapter_uid), 60)
     if not body or #body < 512 then
         Log.error(string.format("tar fetch %s ch%d: %s %s", book_id, chapter_idx,
             tostring(status), body and tostring(#body) or "empty"))
@@ -668,15 +677,9 @@ function Download.ensure_chapter_images(book_id, chapter_uid)
             probe:close()
             cached = cached + 1
         elseif fetched < Download.MAX_CHAPTER_IMAGES then
-            local body, status = wr.http_req({
-                url = url,
-                method = "GET",
-                headers = {
-                    ["User-Agent"] = WeRead.USER_AGENT,
-                    ["Referer"] = WeRead.reader_url(book_id, chapter_uid),
-                },
-                timeout = 30,
-            })
+            -- 必须跟跳转：src 指向 res.weread.qq.com，真身在其 302 的腾讯 CDN 上
+            local body, status = http_get_follow(
+                url, WeRead.reader_url(book_id, chapter_uid), 30)
             local code = tonumber(status)
             if body and #body > 0 and #body <= Download.MAX_IMAGE_BYTES
                 and (not code or (code >= 200 and code < 300)) then

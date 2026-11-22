@@ -1,5 +1,27 @@
 # LOG — 动作日志（ub-mode）
 
+### 图片通道第二轮：跟 302 跳转 + 设备端到端实证
+
+上一轮新增的远端图片通道在真机上取到 **0 字节**：`res.weread.qq.com` 对图片一律 302 到
+腾讯 CDN（`location=https://wrco-40036.sh.gfp.tencent-cloud.com/<book>/img09.jpg?sign=…`），
+而 `net.c` 的 `http_req` 没设 FOLLOWLOCATION。漏跟跳转的表现不是报错而是"0 字节"，
+于是静默退化成"这本书没图"——和 `.done` 化石同一类故障：失败不发声。
+
+修法：把跟跳转抽成 `http_get_follow`（≤3 跳，带 UA/Referer/Cookie），tar 与远端图片
+**两条通道共用**；tar 通道里原来那段手写循环就是它，删掉重复（一处决策一个地方）。
+
+**设备端到端实证**（探针在设备 /tmp，不入库）：
+- CB_2H6B… 第 1 章 `ensure_chapter_images`：目录 0 张 → **7 张**，`complete=true`；
+  spool 正文标记 `CB_…_img03.jpg` 经 `Reader.load_image_block` → `w=500 h=485 rows=16`。
+- 真实入口 `Download.ensure_chapter`（化石目录 `complete_before=false`）：ch16 → 43 张、
+  ch39 → 43 张，标记均解出可绘制块（`w=500 h=567` / `w=467 h=579`）⇒ **打开即补图，不必重下**。
+- 旧书 3300057890 用**带前缀的标记名**解析剥过前缀的落盘文件 → `w=500 h=691` ⇒ 名字对齐生效。
+
+验证：`lua5.1 tests/run.lua` → 26 套全绿（新增 7e 跳转例）；`tools/mut-assets.sh`
+**14 条变异 14/14 KILLED**（新增 M14「GET 不跟 302」）+ RESTORE-OK；部署 SMOKE PIXEL-CHECK PASS EXIT=0。
+仍待用户眼睛确认：图片在阅读页的观感（居中/清晰度/翻页节奏）——`fb_image` 上屏在上一批
+已有极性像素实证，本轮证明的是"图能取到、能解码、能排版"。
+
 ### 图片不显示根因修复（用户实证「新下载的书还是没有图片」）
 
 **取证**（真机 2026-11-23，探针在设备 /tmp，不入库）：`books/` 下 0 个 tar、0 张图；

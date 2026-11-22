@@ -64,6 +64,9 @@ MUTS = [
     ("M13 backfill_assets整体失效",
      'if not ch or not text or not text:find("\\1IMG:") then return end',
      "if true then return end"),
+    ("M14 GET不跟302跳转（CDN取不到图）",
+     "    for _ = 1, 3 do",
+     "    for _ = 1, 1 do"),
 ]
 
 def run_suite():
