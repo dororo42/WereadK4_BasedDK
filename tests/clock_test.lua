@@ -47,21 +47,22 @@ local got = Reader.clock_take(clk, 60 * S)
 check(got == 60, "60s 应一次排空（2×30s），实得 " .. got)
 check(Reader.clock_remainder_s(clk) == 0, "排空后余 0，实得 " .. Reader.clock_remainder_s(clk))
 
--- 2) 静默超限不计：翻页间隔 > DWELL_LIMIT_S 的间隙不累计
+-- 2) 超限封顶：间隔 > dwell 按上限计入（慢读者不为零），但不多计
 clk = Reader.new_clock()
 Reader.clock_activity(clk, 0)
 Reader.clock_activity(clk, 5 * S)                 -- 5s
-Reader.clock_activity(clk, 5 * S + 200 * S)       -- 静默 200s（超 dwell 90s）→ 不计
-Reader.clock_activity(clk, 5 * S + 210 * S)       -- 恢复活动 10s
+Reader.clock_activity(clk, 5 * S + 200 * S)       -- 间隔 200s → 封顶 90s
+Reader.clock_activity(clk, 5 * S + 210 * S)       -- 10s
 got = Reader.clock_take(clk, 5 * S + 210 * S)
-check(got == 0, "dwell 外间隙不应累计（15s < 30s），实得 " .. got)
-check(Reader.clock_remainder_s(clk) == 15, "只应累计 5+10=15s，实得 " .. Reader.clock_remainder_s(clk))
+check(got == 90, "105s 累计应一次排 3×30s=90s 封顶，实得 " .. got)
+local rem = Reader.clock_remainder_s(clk)
+check(rem == 15, "余量应为 105-90=15s，实得 " .. rem)
 
 -- 3) 单次排空 ≤3 块（90s 封顶），残量留钟内
 clk = Reader.new_clock()
 Reader.clock_activity(clk, 0)
-Reader.clock_activity(clk, 200 * S)               -- dwell 内 200s？>90s 不计！
-check(Reader.clock_remainder_s(clk) == 0, "200s 间隔超 dwell 不应计入，实得 " .. Reader.clock_remainder_s(clk))
+Reader.clock_activity(clk, 200 * S)               -- 200s 间隔 → 封顶 90s
+check(Reader.clock_remainder_s(clk) == 90, "200s 间隔封顶计 90s，实得 " .. Reader.clock_remainder_s(clk))
 -- 构造 95s（dwell 内）→ take 应给 3 块（90s），残 5s
 clk = Reader.new_clock()
 Reader.clock_activity(clk, 0)

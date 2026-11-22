@@ -117,13 +117,13 @@ Reader.DWELL_LIMIT_S = 90
 function Reader.new_clock()
     return { acc_ms = 0, last = nil }
 end
--- 每次交互（任意键）调用：校验上一窗口是否落在 dwell 内
+-- 每次交互（任意键）调用：窗口按 min(dt, dwell 上限) 计入
 function Reader.clock_activity(clk, now_ms)
     if clk.last == nil then clk.last = now_ms; return end
     local dt = now_ms - clk.last
     clk.last = now_ms
-    if dt > 0 and dt <= Reader.DWELL_LIMIT_S * 1000 then
-        clk.acc_ms = clk.acc_ms + dt
+    if dt > 0 then
+        clk.acc_ms = clk.acc_ms + math.min(dt, Reader.DWELL_LIMIT_S * 1000)
     end
 end
 -- 翻页后取走满 30s 的整块（服务端对 >30s 的 rt 静默丢弃——插件/真机判据）。
@@ -133,8 +133,8 @@ function Reader.clock_take(clk, now_ms)
     if clk.last ~= nil then
         local dt = now_ms - clk.last
         clk.last = now_ms
-        if dt > 0 and dt <= Reader.DWELL_LIMIT_S * 1000 then
-            clk.acc_ms = clk.acc_ms + dt
+        if dt > 0 then
+            clk.acc_ms = clk.acc_ms + math.min(dt, Reader.DWELL_LIMIT_S * 1000)
         end
     end
     local full = math.floor(clk.acc_ms / 30000)

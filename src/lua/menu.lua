@@ -429,8 +429,10 @@ local function read_book(book_id, force_sync, title_hint)
                 psvts = sess.psvts, pclts = sess.pclts, token = sess.token,
                 elapsed_seconds = seconds,
             })
-            if not res then
-                Log.info("rt tick dropped: " .. tostring(rerr))
+            if res then
+                Log.info(string.format("rt tick +%ds accepted (p%d/%d)", seconds, page, total_pages))
+            else
+                Log.info("rt tick dropped " .. tostring(seconds) .. "s: " .. tostring(rerr))
             end
         end
         local ret = Reader.open(body, ch.title, page, Download.asset_dir(book_id, ch.chapterUid),
@@ -442,11 +444,13 @@ local function read_book(book_id, force_sync, title_hint)
         Progress.set(book_id, cur_idx, ret.page, ch.title, ret.total_pages)
         -- 离章：位置随余量时长分片连发（≤30s×4，无定时器）。失败不打扰阅读——
         -- 本地进度已落盘，位置下次离开该章还会再报；在线口径时长即弃。
-        Report.send_reading({
+        local sent, serr = Report.send_reading({
             book_id = book_id, chapters = chapters, chapter_idx = cur_idx,
             page = ret.page, total_pages = ret.total_pages,
             psvts = sess.psvts, pclts = sess.pclts, token = sess.token,
         }, ret.reading_seconds)
+        Log.info(string.format("rt exit: %ds -> %s chunk(s)%s", ret.reading_seconds or 0,
+            tostring(sent), sent == nil and (" (" .. tostring(serr) .. ")") or ""))
 
         local pos = Download.chapter_pos(chapters, cur_idx)
         if ret.action == "next_chapter" then
