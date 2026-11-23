@@ -150,7 +150,12 @@ end
 function DL._backfill(all, notify)
     local missing = {}
     for _, b in ipairs(all) do
-        if (b.chapters_total or 0) == 0 then missing[#missing + 1] = b end
+        -- 触发条件不止"没有章数"：标题缺失（空或就是 bookId 本身）同样要回填。
+        -- 真机实证：CB_ 型书的 manifest 有 72 章、标题却是 bookId 原文，旧条件永不触发。
+        local title = tostring(b.title or "")
+        if (b.chapters_total or 0) == 0 or title == "" or title == tostring(b.bookId) then
+            missing[#missing + 1] = b
+        end
     end
     if #missing == 0 or not Api.has_login() then return 0 end
     if notify then notify("正在补全书目信息（" .. #missing .. " 本）…") end

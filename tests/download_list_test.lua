@@ -1,7 +1,8 @@
 -- Download manifest/list_books/list_downloaded_chapters 的主机测（SPOOL 注入 tmp）。
 --
 -- 为什么值得写：「已下载书目」和「运行状态」两屏的数据全部出自这三个函数。它们的
--- 故障面在过滤语义上：list_books 只认纯数字目录（垃圾目录不得混入）、
+-- 故障面在过滤语义上：list_books 收录"有 manifest 或数字目录且有正文"（垃圾目录不得混入，
+-- 但 CB_ 型真书必须在列）、
 -- list_downloaded_chapters 必须是 manifest ∩ spool（manifest 有但没落盘的章不算
 -- 已下载）、排序口径是 last_download 降序（最近下载的排最上）。这些错了，
 -- 用户看到的是假清单——比空清单更误导。
@@ -48,7 +49,7 @@ local ok = Download.save_chapter("10101", 1, "第一章", "正文甲一")
 check(ok, "save_chapter 应成功")
 Download.save_chapter("10101", 3, "第三章", "正文甲三")
 
--- 3) list_books：只认纯数字目录；10101 = 2 章、字节为正文和
+-- 3) list_books：数字目录（有 manifest）都列出；10101 = 2 章、字节为正文和
 local books = Download.list_books()
 check(#books == 2, "10101+20202 两个数字目录都应列出，实得 " .. #books)
 local b1
@@ -95,6 +96,27 @@ check(gone == nil, "整书删除后目录应消失")
 local ok_all = Download.delete_all()
 check(ok_all ~= false, "清空全部应执行")
 check(#Download.list_books() == 0, "清空后清单应为空")
+
+-- 7b) 收录判据：CB_ 型真书（有 manifest）必须列出，垃圾目录不得混入。
+--     旧判据"只认纯数字目录"把用户那本图片书（CB_2H6B…）整个从「已下载」抹掉，
+--     连带删除入口也被纯数字守卫堵死。
+Download.save_manifest("CB_2H6Btest", "图片书", CHS)
+Download.save_chapter("CB_2H6Btest", 1, "第一章", "正文")
+os.execute("mkdir -p '" .. DIR .. "/junk-dir' && echo x > '" .. DIR .. "/junk-dir/notes'")
+books = Download.list_books()
+local cb, junk
+for _, b in ipairs(books) do
+    if b.bookId == "CB_2H6Btest" then cb = b end
+    if b.bookId == "junk-dir" then junk = b end
+end
+check(cb ~= nil, "CB_ 型 bookId（真书）应出现在已下载列表，实得 " .. #books .. " 本")
+check(cb ~= nil and cb.title == "图片书", "CB_ 书 title 应取 manifest")
+check(cb ~= nil and cb.chapters_down == 1, "CB_ 书应统计 spool 章数")
+check(junk == nil, "无 manifest 的非数字垃圾目录不得混入")
+check(Download.delete_book("a'b") == false, "含单引号的 id 必须拒绝（rm -rf 拼接守卫）")
+check(Download.delete_book("../..") == false, "路径穿越 id 必须拒绝")
+check(Download.delete_book("CB_2H6Btest"), "CB_ 型真书应可删除（旧纯数字守卫会堵死删除入口）")
+check(io.open(DIR .. "/CB_2H6Btest/manifest.json") == nil, "删除后 CB_ 书目录应消失")
 
 -- 8) tar 解析：512B POSIX ustar 合成字节（name/size 八进制/512 对齐）
 local function tar_member(name, data)

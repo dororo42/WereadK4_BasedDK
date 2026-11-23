@@ -67,14 +67,18 @@ MUTS = [
     ("M14 GET不跟302跳转（CDN取不到图）",
      "    for _ = 1, 3 do",
      "    for _ = 1, 1 do"),
+    ("M15 已下载收录退回纯数字判据（CB_书消失）",
+     '            if m or (id:match("^%d+$") and chapters_down > 0) then',
+     '            if id:match("^%d+$") then'),
+    ("M16 delete_book退回纯数字守卫（CB_书删不掉）",
+     '    if id ~= raw or id == "" then return false, "bad book id" end',
+     '    if not raw:match("^%d+$") then return false, "bad book id" end'),
 ]
 
 def run_suite():
-    p = subprocess.run(
-        ["lua5.1", "-e",
-         'package.path="src/lua/lib/?.lua;src/lua/?.lua;tests/?.lua;"..package.path;'
-         'local f=assert(loadfile("tests/download_assets_test.lua"));os.exit((f() or 0)==0 and 0 or 1)'],
-        capture_output=True, text=True, timeout=180)
+    # 跑全量 runner（退出码 1 = 有失败）：任何一套都能杀变异，不只新写的那套
+    p = subprocess.run(["lua5.1", "tests/run.lua"],
+                       capture_output=True, text=True, timeout=600)
     return p.returncode, p.stdout + p.stderr
 
 killed = survived = broken = 0

@@ -107,6 +107,18 @@ local function run()
         "书名应来自 shelf 且 manifest 含目录")
     check(saved["303"] and saved["303"].title == "游隼", "第二本也应回填")
 
+    -- 2b) 章数齐全但标题就是 bookId（真机 CB_ 书的形态）→ 也要回填
+    calls = {}
+    Api.get_shelf = function()
+        return { books = { { bookId = "CB_2H6Btest", title = "图片书" } } }
+    end
+    n = DL._backfill({ { bookId = "CB_2H6Btest", title = "CB_2H6Btest",
+                         chapters_total = 72, chapters_down = 72 } }, nil)
+    check(n == 1, "标题缺失（=bookId）即使章数齐全也应回填，实得 " .. n)
+    local saved_cb
+    for _, c in ipairs(calls) do if c.f == "save" then saved_cb = c end end
+    check(saved_cb and saved_cb.title == "图片书", "应写入 shelf 里的真书名")
+
     -- 3) shelf 查不到的书 → 跳过（保留 id 显示，不写坏 manifest）
     calls = {}
     Api.get_shelf = function() return { books = {} } end

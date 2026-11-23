@@ -316,16 +316,16 @@ end
 function Download.list_books()
     local out = {}
     local dirs = {}
-    local p = io.popen("ls -1 " .. Download.SPOOL .. " 2>/dev/null")
+    local p = io.popen("ls -1 '" .. Download.SPOOL .. "' 2>/dev/null")
     if not p then return out end
     for id in p:lines() do dirs[#dirs + 1] = id end
     p:close()
     for _, id in ipairs(dirs) do
-        if id:match("^%d+$") then
+        if id ~= "." and id ~= ".." then
             local m = Download.load_manifest(id)
             local chapters_down, bytes = 0, 0
-            local dp = Download.SPOOL .. "/" .. id
-            local pp = io.popen("ls -1 " .. dp .. "/*.txt 2>/dev/null")
+            local dp = Download.SPOOL .. "/" .. path_safe(id)
+            local pp = io.popen("ls -1 '" .. dp .. "'/*.txt 2>/dev/null")
             if pp then
                 for fn in pp:lines() do
                     chapters_down = chapters_down + 1
@@ -337,15 +337,20 @@ function Download.list_books()
                 end
                 pp:close()
             end
-            local last_dl = m and tonumber(m.last_download) or 0
-            out[#out + 1] = {
-                bookId = id,
-                title = (m and m.title or "") ~= "" and m.title or id,
-                chapters_total = m and m.chapters and #m.chapters or 0,
-                chapters_down = chapters_down,
-                bytes = bytes,
-                last_download = last_dl,
-            }
+            -- 收录判据 = 有 manifest，**或**数字书目录且真有 spool 正文（manifest 写失败的
+            -- 残留也得看得见、删得掉）。旧判据"只认纯数字目录"把 CB_2H6B… 这类真书整个从
+            -- 「已下载」抹掉（用户实证：图片书不在列表里、也删不掉），而垃圾目录两条都不满足。
+            if m or (id:match("^%d+$") and chapters_down > 0) then
+                local last_dl = m and tonumber(m.last_download) or 0
+                out[#out + 1] = {
+                    bookId = id,
+                    title = (m and m.title or "") ~= "" and m.title or id,
+                    chapters_total = m and m.chapters and #m.chapters or 0,
+                    chapters_down = chapters_down,
+                    bytes = bytes,
+                    last_download = last_dl,
+                }
+            end
         end
     end
     table.sort(out, function(a, b) return (a.last_download or 0) > (b.last_download or 0) end)
@@ -723,11 +728,19 @@ function Download.delete_chapter(book_id, chapter_idx)
     return true
 end
 
--- 删除整书（spool + manifest）。bookId 来自 list_books 扫描（纯数字），仍加守卫
--- 防御未来调用面变化；路径拼进 shell 前必须过这个检查。
+-- 删除整书（spool + manifest + 图片资产）。守卫从"纯数字"升级为"路径安全 + 确实下载过"：
+-- 纯数字判据会把 CB_2H6B… 这类真书的删除入口一并堵死（用户只剩"清空全部"）。
+-- 路径分量仍必须过 path_safe——它要拼进 rm -rf 的单引号里。
 function Download.delete_book(book_id)
-    local id = tostring(book_id)
-    if not id:match("^%d+$") then return false, "bad book id" end
+    local raw = tostring(book_id)
+    local id = path_safe(raw)
+    if id ~= raw or id == "" then return false, "bad book id" end
+    if not Download.load_manifest(raw) then
+        local pp = io.popen("ls -1 '" .. Download.SPOOL .. "/" .. id .. "'/*.txt 2>/dev/null")
+        local one = pp and pp:read("*l")
+        if pp then pp:close() end
+        if not one then return false, "not downloaded" end
+    end
     os.execute("rm -rf '" .. Download.SPOOL .. "/" .. id .. "'")
     os.execute("rm -rf '" .. Download.ASSET_DIR .. "/" .. id .. "'")
     Log.info("delete book: " .. id)

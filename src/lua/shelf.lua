@@ -1,8 +1,9 @@
--- shelf.lua — 书架列表视图（gateway /shelf/sync → 中文列表 → 五向键导航）。
+-- shelf.lua — 书架列表视图（gateway /shelf/sync → 最近阅读 10 本 → 五向键导航）。
 -- 用法：menu.lua 级联进入；也可独立 weread-dyn lua/shelf.lua（登录态必需）。
--- 交互：Up/Down 移动（跨页回卷），Left/Right 翻整页，中键选择，Back 返回（返回 nil）。
--- 分页是**客户端渲染分页**：/shelf/sync 无分页参数，一次响应就带回首批 10 本以外的
--- 全部书目元数据（真机实测 13.9s / 4.88MB / 10187 本），这里只是每页画 ROWS 行。
+-- 交互：Up/Down 移动（10 本内回卷），中键选择，Back 返回（返回 nil）；Left/Right 无语义。
+-- 为什么仍要拉全量元数据：/shelf/sync **没有分页参数**，一次响应就带回全部书目
+-- （真机实测 13.9s / 4.88MB / 10187 本）；"只看最近 10 本"是用户口径，在客户端按
+-- readUpdateTime 降序取前 10。元数据必须一次拉全，正文才是按章 spool。
 
 package.path = "/mnt/us/weread/lua/lib/?.lua;/mnt/us/weread/lua/?.lua;" .. package.path
 
@@ -43,10 +44,9 @@ end
 local function draw_page(books, sel, ft_main, ft_small)
     local W, H = wr.fb_w(), wr.fb_h()
     local n = #books
-    local pages = math.max(1, math.ceil(n / ROWS))
-    local page = math.floor((sel - 1) / ROWS)
-    local first = page * ROWS + 1
-    local last = math.min(first + ROWS - 1, n)
+    -- 单屏契约：books 已在 run() 里 trim 到 MAX_ITEMS(=ROWS)，行区间恒为 1..n。
+    local first = 1
+    local last = math.min(n, ROWS)
 
     wr.fb_fill(0, 0, W, H, 0x00)
     ft_center(ft_main, 14, "书架", 0xFF)
@@ -119,13 +119,8 @@ function Shelf.run()
 
     local running = true
     local selected
-    local pages = math.max(1, math.ceil(#books / ROWS))
-    local function go_page(delta)
-        local page = math.floor((sel - 1) / ROWS) + delta
-        page = (page % pages + pages) % pages          -- 越界回卷，不留半页
-        sel = math.min(page * ROWS + 1, #books)
-        draw_page(books, sel, ft_main, ft_small)
-    end
+    -- Left/Right 在单屏契约下无语义（books 恒 ≤ ROWS）：翻页分支留着就是死代码——
+    -- 按下去只白刷一次屏，而"死键"在真机上的表现和坏键一模一样。
     while running do
         local key = wr.input_poll(1000, true)
         if key == "Up" then
@@ -136,10 +131,6 @@ function Shelf.run()
             sel = sel + 1
             if sel > #books then sel = 1 end
             draw_page(books, sel, ft_main, ft_small)
-        elseif key == "Left" then
-            go_page(-1)
-        elseif key == "Right" then
-            go_page(1)
         elseif key == "Press" then
             selected = books[sel]
             running = false
