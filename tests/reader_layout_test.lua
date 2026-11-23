@@ -128,6 +128,67 @@ check(open_at({}) == 1, "空表（无 fraction）视为首页，不该当成负�
 check(open_at(4) == 4, "整数页码约定不受影响")
 check(open_at(-1) == tot, "负数仍是「从末页开始」约定")
 
+------------------------------------------------------------------ 7) 图片块：页高钳制 + 推页后画在新页首行
+-- 图片尺寸是服务端来的、不受控：整宽缩放会造出比一页还高的块，跨页绘制必然
+-- 裁切并压过页脚（真机用户实证「裁剪/遮挡」）。这里钉三件事：超页高图等比钳进
+-- 页框；被推页的块画在新页 slot 1 的 y（旧实现画在 top_pad 个行槽之后=压到正文）；
+-- 常规图不缩放变形。坐标全部可从 mock 精确推出：26pt/1.54 → lh=40、每页 18 行。
+Config.set("font_size", 26)
+Config.set("line_factor", 1.54)
+local IMG_DIR = "/tmp/wr_reader_img_test_" .. tostring(os.time())
+os.execute("mkdir -p '" .. IMG_DIR .. "'")
+local IMG1, IMG2 = IMG_DIR .. "/img1.jpg", IMG_DIR .. "/img2.jpg"
+for _, p in ipairs({ IMG1, IMG2 }) do
+    local fi = assert(io.open(p, "wb")); fi:write(p == IMG1 and "JPEG1" or "JPEG2"); fi:close()
+end
+local img_draws = {}
+wr.image_decode = function(data)
+    if data == "JPEG1" then return "G1", 600, 2400 end   -- 整宽缩放后 2160px：必触发页高钳制
+    if data == "JPEG2" then return "G2", 600, 400 end    -- 常规图：不钳
+    return nil
+end
+wr.image_scale = function(gray, _w, _h, dw, dh) return gray .. "@" .. dw .. "x" .. dh end
+wr.fb_image = function(x, y, w, h, gray)
+    img_draws[#img_draws + 1] = { x = x, y = y, w = w, h = h, gray = tostring(gray) }
+end
+
+-- 7a) 推页：5 段文本（15 行）+ 空行 = 16 行，块 18 行装不下 → 垫 2 行推到第 2 页首
+-- （图在推后的第 2 页：必须真的翻一页才画得出来，Back 直退只画第 1 页）
+local lines_push = {}
+for i = 1, 5 do lines_push[i] = ("字"):rep(39) end
+lines_push[6] = ""
+lines_push[7] = "\1IMG:img1.jpg\1"
+drawn, keys = {}, { "Down", "Back" }
+img_draws = {}
+local ret_push = Reader.open(table.concat(lines_push, "\n"), "标题", 1, IMG_DIR)
+check(#img_draws == 1, "推页图片只画一次，实得 " .. #img_draws)
+local d1 = img_draws[1]
+check(d1.y == 24, "被推页的图必须画在新页首行 y=24（旧实现 y=104 压到正文），实得 "
+    .. tostring(d1 and d1.y))
+check(d1.w == 170 and d1.h == 680, "超页高图必须等比钳进页框 170x680，实得 "
+    .. tostring(d1 and d1.w) .. "x" .. tostring(d1 and d1.h))
+check(d1.x == 215, "图片应水平居中，实得 x=" .. tostring(d1 and d1.x))
+check(d1.y + d1.h <= 800 - 44, "图片不得压页脚，实得 bottom=" .. tostring(d1 and d1.y + d1.h))
+check(ret_push.total_pages == 2, "36 行（含垫行）应恰好 2 页，实得 " .. ret_push.total_pages)
+
+-- 7b) 不推页：文本 3 行后跟常规图，slot 1 紧跟文本行，整宽等比不变形
+drawn, keys = {}, { "Back" }
+img_draws = {}
+Reader.open(("字"):rep(39) .. "\n\1IMG:img2.jpg\1", "标题", 1, IMG_DIR)
+check(#img_draws == 1, "常规图只画一次，实得 " .. #img_draws)
+local d2 = img_draws[1]
+check(d2.y == 24 + 3 * 40, "未推页的图应画在其行槽首（文本 3 行之后 y=144），实得 "
+    .. tostring(d2 and d2.y))
+check(d2.w == 540 and d2.h == 360, "常规图整宽等比缩放 540x360，实得 "
+    .. tostring(d2 and d2.w) .. "x" .. tostring(d2 and d2.h))
+
+os.remove(IMG1)
+os.remove(IMG2)
+os.execute("rmdir '" .. IMG_DIR .. "'")
+wr.image_decode = nil
+wr.image_scale = nil
+wr.fb_image = nil
+
 Config.PATH = path_saved
 os.remove(TMP)
 _G.wr = nil

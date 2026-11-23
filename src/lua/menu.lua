@@ -132,6 +132,22 @@ local function show(msg, keep_screen)
     if not keep_screen then draw() end
 end
 
+-- 确认屏（破坏性操作统一走这里）：中键确认，Back 取消（downloaded.lua 同款交互）。
+local function confirm(msg)
+    wr.fb_fill(0, 0, W, H, 0x00)
+    text(22, Y0 + 20, msg, 0xFF, ft_main)
+    if ft_small then
+        wr.fb_text_ft(ft_small, 16, H - 40, "中键确认 · Back 取消", 0x60)
+    end
+    wr.fb_quant()
+    wr.fb_refresh(0)
+    while true do
+        local k = wr.input_poll(-1, true)
+        if k == "Press" then return true end
+        if k == "Back" or k == "Menu" or k == "Home" then return false end
+    end
+end
+
 -- 列表标签截断（UTF-8 安全，用 protocol.utf8_substr）：章节标题可能长于一行
 local function clip(s, n)
     s = tostring(s or "")
@@ -536,6 +552,23 @@ local function check_connection()
 end
 
 -- 「同步进度」手动入口：对最近一本书强制拉一次云端位置并接着读（忽略设置开关）。
+
+-- 扫码登录（主菜单与设置屏共用）：屏上出码 + 轮询 + 回执。只在用户显式选择时
+-- 执行（绝不自动扫码，风控约束）。
+local function do_qr_login()
+    local account, lerr = Auth.login(
+        function(url) Auth.draw_login_screen(url, "微信扫码登录", "手机微信扫码 · Back 取消") end,
+        function(msg) Auth.clear_screen(msg) end)
+    if account then
+        Auth.clear_screen("登录成功: " .. tostring(account.name or account.user_vid))
+        local t0 = wr.millis()
+        while wr.millis() - t0 < 1500 do end
+    else
+        Auth.clear_screen("登录未完成: " .. tostring(lerr):sub(1, 50))
+        local t0 = wr.millis()
+        while wr.millis() - t0 < 2500 do end
+    end
+end
 local function sync_last_book()
     local last = Progress.get_last()
     if last then
@@ -588,6 +621,19 @@ local function settings_screen()
         -- 账号
         { name = "云端进度", key = "progress_sync",
           opts = { {label="开",v=true},{label="关",v=false} } },
+        -- 同一位置不同状态：已登录=退出账号（确认后清登录态，凭据改名保留）；
+        -- 未登录=扫码重新登录（用户显式发起，绝不自动出码）。
+        { name_fn = function() return Api.has_login() and "退出账号" or "扫码重新登录" end,
+          action = function()
+              if Api.has_login() then
+                  if confirm("退出后需要重新扫码登录，确定退出？") then
+                      local ok = Auth.logout()
+                      show(ok and "已退出账号" or "退出失败（登录态仍在）", true)
+                  end
+              else
+                  do_qr_login()
+              end
+          end },
         { name = "检查连接", action = check_connection },
         { name = "同步进度", action = sync_last_book },
         SEP,
@@ -617,10 +663,12 @@ local function settings_screen()
             if e.sep then
                 wr.fb_fill(16, y + math.floor(ITEM_H / 2) - 1, W - 32, 1, 0x40)
             else
-                local curv = current_of(e)
-                local label = e.name
-                for _, o in ipairs(e.opts or {}) do
-                    if tostring(o.v) == curv then label = label .. "（当前: " .. o.label .. "）" end
+                local label = e.name_fn and e.name_fn() or e.name
+                if e.opts then
+                    local curv = current_of(e)
+                    for _, o in ipairs(e.opts) do
+                        if tostring(o.v) == curv then label = label .. "（当前: " .. o.label .. "）" end
+                    end
                 end
                 if i == sel_e then
                     wr.fb_fill(12, y - 6, W - 24, ITEM_H - 6, 0xFF)
@@ -735,18 +783,7 @@ if not SMOKE then
             if items[sel] == "退出" then
                 running = false
             elseif items[sel] == "扫码登录" then
-                local account, lerr = Auth.login(
-                    function(url) Auth.draw_login_screen(url, "微信扫码登录", "手机微信扫码 · Back 取消") end,
-                    function(msg) Auth.clear_screen(msg) end)
-                if account then
-                    Auth.clear_screen("登录成功: " .. tostring(account.name or account.user_vid))
-                    local t0 = wr.millis()
-                    while wr.millis() - t0 < 1500 do end
-                else
-                    Auth.clear_screen("登录未完成: " .. tostring(lerr):sub(1, 50))
-                    local t0 = wr.millis()
-                    while wr.millis() - t0 < 2500 do end
-                end
+                do_qr_login()
                 sel = 1
                 draw()
             elseif items[sel] == "已下载" then

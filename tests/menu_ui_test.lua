@@ -95,6 +95,11 @@ local function all_text()
     for _, f in ipairs(frames) do t[#t + 1] = table.concat(f, "|") end
     return table.concat(t, "||")
 end
+-- 最后一帧（状态翻转后的重绘主菜单）：缺席断言只能看它——all_text 会连开机时的
+-- 旧帧一起算进去，登录态翻转前画过的名字永远在。
+local function last_frame_text()
+    return table.concat(frames[#frames] or {}, "|")
+end
 local function keys_of(t)
     local n = {}
     for k in pairs(t) do n[#n + 1] = tostring(k) end
@@ -177,13 +182,15 @@ local Fonts = require("fonts")
 Fonts.probe = function() return false end       -- 主机没有设备字体：清单只剩默认项
 local DEFAULT_FONT = Fonts.DEFAULT
 
+local api_logged_in = true          -- 必须先于引用它的桩声明（否则闭包捕获全局 nil）
 stub("api", {
-    has_login = function() return true end,
+    has_login = function() return api_logged_in end,
     load_auth = function() return { account = { name = "测试号" }, cookies = {} } end,
     BASE_URL = "https://weread.qq.com",
     get_shelf = function() return { books = {} } end,
 })
 local auth_status_ret = "已登录"
+local auth_login_ret, auth_logout_ret
 stub("auth", {
     status = function() return auth_status_ret end,
     clear_screen = function(m)
@@ -191,8 +198,30 @@ stub("auth", {
         capture()
     end,
     renew = function() return "cooling" end,
-    draw_login_screen = function() end,
-    login = function() return nil, "not-in-test" end,
+    draw_login_screen = function()
+        calls[#calls + 1] = { f = "draw_login_screen" }
+    end,
+    login = function(draw_cb)
+        calls[#calls + 1] = { f = "auth_login" }
+        local r = auth_login_ret
+        auth_login_ret = nil
+        if r then
+            api_logged_in = true               -- 登录成功 → 登录态翻转（设置项同位换标签）
+            -- 真实现里出码回调由 Auth.login 在拿到 URL 时调；桩必须同样调它，
+            -- 否则「屏上出码」永远测不到。
+            if draw_cb then draw_cb("https://weread.qq.com/qr-in-test") end
+            return r
+        end
+        return nil, "not-in-test"
+    end,
+    logout = function()
+        calls[#calls + 1] = { f = "auth_logout" }
+        local r = auth_logout_ret
+        auth_logout_ret = nil
+        if r ~= nil then return r end
+        api_logged_in = false                  -- 退出成功 → 登录态翻转
+        return true
+    end,
 })
 stub("shelf", { run = function() calls[#calls + 1] = { f = "shelf" }; return "B77" end })
 stub("downloaded", { browse = function() calls[#calls + 1] = { f = "dl_browse" } end })
@@ -311,6 +340,8 @@ local function reset_state()
     reader_ret, dl_result = nil, nil
     poll0_key = nil
     auth_status_ret = "已登录"
+    api_logged_in = true
+    auth_login_ret, auth_logout_ret = nil, nil
     last_book_id, last_rec = nil, nil
 end
 local function reading_state()
@@ -346,7 +377,7 @@ check(txt:find("已登录", 1, true) == nil, "失效态不得再显示「已登�
 -- 1b) 检查连接入口：调 Auth.renew(true) 并如实回报结论
 reset_state()
 keys("Down", "Down", "Down", "Press",          -- 主菜单 → 设置
-     "Down", "Down", "Down", "Down", "Down", "Down", "Press")  -- 检查连接（可选项第 7 = Down×6）
+     "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Press")  -- 检查连接（可选项第 8 = Down×7）
 ok, err = run_menu()
 check(ok, "检查连接应跑通，实得 " .. tostring(err))
 check(all_text():find("正在检测连接", 1, true) ~= nil, "检测中应有过程提示")
@@ -449,7 +480,7 @@ sync_remote_ret = { chapter_uid = "u1", percent = 5 }
 sync_target_ret = { chapter_idx = 10, pos = 1, fraction = 0.1, title = "第1章" }
 sync_side, sync_why = "local", "same"
 keys("Down", "Down", "Down", "Press",       -- 主菜单 → 设置（第 4 项）
-     "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Press",  -- 同步进度（可选项第 8 = Down×7）
+     "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Press",  -- 同步进度（可选项第 9 = Down×8）
      "Back")                                 -- 返回设置 → 主菜单 Back 退出
 ok, err = run_menu()
 check(ok, "同步进度入口应跑通，实得 " .. tostring(err))
@@ -470,7 +501,7 @@ check(count_of("dl_browse") == 1, "中键已下载必须进 Downloaded.browse")
 -- 7c) 「运行状态」入口：状态屏（内存/堆/spool 占用/错误计数/app.log 尾部）
 reset_state()
 keys("Down", "Down", "Down", "Press",         -- 主菜单 → 设置
-     "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Press", -- 运行状态（可选项第 9 = Down×8）
+     "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Down", "Press", -- 运行状态（可选项第 10 = Down×9）
      "Back", "Back")                            -- 状态屏任意键 → 设置返回 → 主菜单 Back 退出
 ok, err = run_menu()
 check(ok, "运行状态屏应跑通，实得 " .. tostring(err))
@@ -544,6 +575,42 @@ txt = all_text()
 check(txt:find("下载失败", 1, true) ~= nil and txt:find("500", 1, true) ~= nil,
     "失败要带服务端原因，实得 " .. (txt:match("下载失败[^|]*") or "-"))
 check(txt:find("成功 0 失败 0", 1, true) == nil, "失败时不许打印零计数")
+
+-- 13) 设置 → 账号项（已登录态）=「退出账号」：确认后 Auth.logout，退出立即全屏生效
+reset_state()
+keys("Down", "Down", "Down", "Press",              -- 主菜单 → 设置
+     "Down", "Down", "Down", "Down", "Down", "Down", "Press",   -- 账号项（可选项第 7 = Down×6）
+     "Press")                                       -- 确认屏中键
+ok, err = run_menu()
+check(ok, "退出账号应跑通，实得 " .. tostring(err))
+check(call_of("auth_logout") ~= nil, "确认后必须调 Auth.logout，实得 "
+    .. tostring(count_of("auth_logout")))
+txt = all_text()
+check(txt:find("退出账号", 1, true) ~= nil, "已登录时同一位置必须显示「退出账号」")
+check(txt:find("退出后需要重新扫码登录", 1, true) ~= nil, "退出是破坏性操作，必须先确认")
+check(txt:find("已退出账号", 1, true) ~= nil, "退出要有回执，实得 " .. txt:sub(-200))
+local post = last_frame_text()
+check(post:find("测试号", 1, true) == nil, "退出后主菜单不得再显示账号名，末帧 "
+    .. post:sub(1, 120))
+check(post:find("扫码登录", 1, true) ~= nil, "退出后主菜单必须提供扫码登录入口")
+
+-- 14) 设置 → 账号项（未登录态）=「扫码重新登录」：显式发起出码，成功后同一位置
+--     翻转为「退出账号」（两者同位不同态）
+reset_state()
+api_logged_in = false
+auth_login_ret = { name = "新号" }
+keys("Down", "Down", "Down", "Press",
+     "Down", "Down", "Down", "Down", "Down", "Down", "Press",
+     "Back")                                        -- 登录回执后退出设置 → 主菜单 Back 收敛
+ok, err = run_menu()
+check(ok, "扫码重新登录应跑通，实得 " .. tostring(err))
+check(call_of("auth_login") ~= nil, "未登录时账号项必须发起扫码登录")
+check(call_of("draw_login_screen") ~= nil, "扫码登录必须屏上出码")
+txt = all_text()
+check(txt:find("扫码重新登录", 1, true) ~= nil, "未登录时同一位置必须显示「扫码重新登录」")
+check(txt:find("登录成功: 新号", 1, true) ~= nil, "登录成功要有回执，实得 " .. txt:sub(-200))
+check(txt:find("退出账号", 1, true) ~= nil, "登录成功后同一位置应翻转为「退出账号」")
+check(txt:find("测试号", 1, true) ~= nil, "登录后主菜单应显示新账号名")
 
 ------------------------------------------------------------------ 还原
 setmetatable(_G, nil)

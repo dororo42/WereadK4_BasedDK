@@ -377,6 +377,16 @@ function Auth.status()
     return "已登录"
 end
 
+-- 退出账号：auth.json 改名保留（.bak-logout-<ts>，误退可恢复）。设备指纹、阅读
+-- 进度、已下载内容都不动——退出只清登录态。成功判据是「退出后判为未登录」：
+-- os.execute 的返回值口径在 Lua 5.1/LuaJIT 间不一致，不作依据。
+function Auth.logout()
+    os.execute("mv '" .. Api.AUTH_PATH .. "' '" .. Api.AUTH_PATH
+        .. ".bak-logout-" .. tostring(os.time()) .. "' 2>/dev/null")
+    Auth.last_renew_result = nil
+    return not Api.has_login(), Api.AUTH_PATH
+end
+
 -- 用 wr_rt 换新的 wr_skey。返回 status（见 classify_renewal）+ 错误串。
 -- 落盘纪律：先判成功，再改副本，最后原子替换——失败响应一律不触盘。
 function Auth.renew(force)

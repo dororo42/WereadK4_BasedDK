@@ -167,12 +167,10 @@ function Reader.layout(ft, maxw, text, assets_dir, lh)
                     blk.top_pad = 0
                 else
                     blk.top_pad = left % math.max(1, Reader._rows_per_page or 1)
-                    if blk.top_pad == k then blk.top_pad = 0 end
                     for _ = 1, blk.top_pad do rows[#rows + 1] = "" end
                 end
                 for s = 1, k do
-                    rows[#rows + 1] = { img_w = blk.w, img_h = blk.h, img_gray = blk.gray,
-                        slot = s, total = k, top_pad = blk.top_pad }
+                    rows[#rows + 1] = { img_w = blk.w, img_h = blk.h, img_gray = blk.gray, slot = s }
                 end
             else
                 rows[#rows + 1] = "[图片]"
@@ -192,7 +190,8 @@ function Reader.layout(ft, maxw, text, assets_dir, lh)
 end
 
 -- 加载并缩放一张图（会话内解码缓存）。返回 { w, h, gray, total } | nil。
--- 缩放：整宽适配 maxw，等比；高超出页高时截断到页高（罕见：整页插图按高排）。
+-- 缩放：等比装进 maxw × 页高 的框（宽适配后高仍超出页高的图，按高反推宽——
+-- 超页高的块永远装不进原子分页，跨页绘制必然裁切并压过页脚，真机实证）。
 Reader._img_cache = {}
 Reader._rows_per_page = nil
 function Reader.load_image_block(assets_dir, name, maxw, lh)
@@ -236,6 +235,15 @@ function Reader.load_image_block(assets_dir, name, maxw, lh)
     -- 等比缩放到 maxw 内（最近邻点采样，C 层做——Lua 拼 60 万 string.char 参数会爆栈）
     local dw = math.min(maxw, w)
     local dh = math.max(1, math.floor(h * (dw / w) + 0.5))
+    -- 高也要进页：钳到 (rows_per_page-1) 行，保证 total = ceil(dh/lh)+1 ≤ rows_per_page，
+    -- 原子块才恒能整页放下。rpp≤1 的退化场景没有可用页框，不钳。
+    local lh_eff = lh or 34
+    local max_h = (Reader._rows_per_page and Reader._rows_per_page > 1)
+        and (Reader._rows_per_page - 1) * lh_eff or nil
+    if max_h and dh > max_h then
+        dh = max_h
+        dw = math.max(1, math.floor(w * dh / h + 0.5))   -- 等比反推，宽必然 ≤ maxw
+    end
     gray = wr.image_scale(gray, w, h, dw, dh)
     if not gray then Reader._img_cache[key] = false return nil end
     local blk = { w = dw, h = dh, gray = gray, total = 0 }
@@ -283,8 +291,8 @@ function Reader.open(chapter_text, chapter_title, start_page, assets_dir, opts)
         for i = first + 1, math.min(first + rows_per_page, #rows) do
             local row = rows[i]
             if type(row) == "table" then
-                -- 图片块：仅 slot 1（越过 top_pad 后的首行）绘制一次，其余槽只推进 y
-                if row.slot == (row.top_pad or 0) + 1 then
+                -- 图片块：slot 1 绘制一次（垫行是独立 "" 行，块行 slot 从 1 起），其余槽只推进 y
+                if row.slot == 1 then
                     local ix = math.floor((W - row.img_w) / 2)
                     wr.fb_image(ix, y, row.img_w, row.img_h, row.img_gray)
                 end

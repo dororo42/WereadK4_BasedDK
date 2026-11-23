@@ -93,5 +93,29 @@ check(Auth.status() == "离线·无网络", "network 显示离线·无网络")
 Api.has_login = saved_has_login
 Auth.last_renew_result = nil
 
+-- 11) Auth.logout：auth.json 改名保留（.bak-logout-<ts>，误退可恢复），退出后必须
+--     判为未登录（成功判据是事后状态，不是 os.execute 返回值——5.1/LuaJIT 口径不一）。
+local saved_auth_path = Api.AUTH_PATH
+local TDIR = "/tmp/wr_renew_logout_test_" .. tostring(os.time())
+os.execute("mkdir -p '" .. TDIR .. "'")
+local f = io.open(TDIR .. "/auth.json", "w")
+f:write('{"cookies":{"wr_skey":"kkkkkkkk"},"api_key":"testkey","account":{"name":"t"}}')
+f:close()
+Api.AUTH_PATH = TDIR .. "/auth.json"
+check(Api.has_login(), "fixture 必须先判为已登录（否则 logout 测的是空文件）")
+local ok1 = Auth.logout()
+check(ok1 == true, "退出应返回 true")
+check(not Api.has_login(), "退出后必须判为未登录")
+local p = io.popen("ls '" .. TDIR .. "'")
+local listing = p and p:read("*a") or ""
+if p then p:close() end
+check(listing:find("auth%.json%.bak%-logout%-%d+", 1, false) ~= nil,
+    "原凭据必须改名保留为 .bak-logout-<ts>，实得 " .. listing:gsub("\n", " "))
+local ok2 = Auth.logout()
+check(ok2 == true, "重复退出应幂等返回 true（文件已不在=已是未登录）")
+check(not Api.has_login(), "重复退出后仍是未登录")
+Api.AUTH_PATH = saved_auth_path
+os.execute("rm -rf '" .. TDIR .. "'")
+
 print("renew_test: " .. fails .. " failure(s)")
 return fails
