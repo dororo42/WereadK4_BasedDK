@@ -1,5 +1,33 @@
 # LOG — 动作日志（ub-mode）
 
+### 设备重启后复跑：4 smoke 全绿；「43 张」记录更正（探针伪证排除）
+
+2026-11-23 上午设备重启（复跑时 uptime 2:42），按上节预案验证。md5 对账：设备上 6 个关键
+Lua（download/downloaded/reader/html_text/shelf/menu）与仓库一致。
+
+| smoke | 结果 |
+| --- | --- |
+| `menu --smoke` | RC=0，PIXEL-CHECK PASS |
+| `shelf_smoke --smoke` | RC=0，SHELF-PIXEL-PASS + SHELF-ROWS-PASS（shown=10 books=10） |
+| `reader_render_smoke` | RC=0，ALL PASS（rows=55 回环、body-max=255） |
+| `dk3_smoke` | RC=0，0 failure（5/5 章 spool；cached re-run 0 网络调用） |
+
+⇒ SIGSEGV 判定成立：设备侧脏状态，重启即清，不是本轮代码。
+
+**「43 张」更正**（复跑后盘面审计发现与记录对不上）：第二轮记的「ch16/ch39 → 43 张」
+不成立——真实盘面该两章 spool 正文各只有 **1 个**图标记。当时探针脚本本身在 /tmp，
+已随重启消失，机制无法完全复盘；可确证的是 43 不出自持久盘面（推测出自探针环境里
+fresh-fetch 的另一份 raw/web 变体，资产落在探针本地目录随重启丢失——仅推测，不足为证）。
+**权威口径 = app.log + 盘面三方对账**（11-23 07:58 真实入口，非探针）：CB_ 书
+ch1/ch16/ch39 `fetched=7/1/1`；逐章审计：正文标记数 7/1/1 = 盘上文件数 7/1/1，
+标记名与文件名**逐一对齐**（ch1 img03…img11 全中，ch16=img13、ch39=img16，
+missing=空）⇒ 已下章节每个标记都有文件，阅读页无 [图片] 占位。ch57/58/62 是
+0 图 `.done` 化石，`assets_complete=false` 触发打开即补（设计内）——已用真实函数
+当场验证：三枚化石各补齐 1 张（img25/img29/img30，21.7KB/1.9KB/18KB）+ `.done`，
+全书图资产闭环。
+教训入册：探针一旦覆盖 SPOOL/ASSET_DIR（尤其指到 tmpfs），其“成功”输出不可作为
+持久化证据；结论必须落在 app.log + 标记数 vs 文件数的三方对账上。
+
 ### 真机复跑 smoke 出现全局 SIGSEGV（不是本轮 Lua 改动）
 
 修完图片链路后复跑 `shelf_smoke` / `dk3_smoke` / `reader_render_smoke`，三者 `RC=139`
@@ -62,8 +90,10 @@
 **设备端到端实证**（探针在设备 /tmp，不入库）：
 - CB_2H6B… 第 1 章 `ensure_chapter_images`：目录 0 张 → **7 张**，`complete=true`；
   spool 正文标记 `CB_…_img03.jpg` 经 `Reader.load_image_block` → `w=500 h=485 rows=16`。
-- 真实入口 `Download.ensure_chapter`（化石目录 `complete_before=false`）：ch16 → 43 张、
-  ch39 → 43 张，标记均解出可绘制块（`w=500 h=567` / `w=467 h=579`）⇒ **打开即补图，不必重下**。
+- 真实入口 `Download.ensure_chapter`（化石目录 `complete_before=false`）：ch16/ch39 补图
+  成功、标记解出可绘制块（`w=500 h=567` / `w=467 h=579`）⇒ **打开即补图，不必重下**。
+  【更正 11-23】此处原记「ch16 → 43 张、ch39 → 43 张」不成立——43 非真实盘面（见顶部
+  更正节）；两章真实标记数各 1，真实入口 fetched=1/1，标记与文件逐一对齐。
 - 旧书 3300057890 用**带前缀的标记名**解析剥过前缀的落盘文件 → `w=500 h=691` ⇒ 名字对齐生效。
 
 验证：`lua5.1 tests/run.lua` → 26 套全绿（新增 7e 跳转例）；`tools/mut-assets.sh`
