@@ -1,5 +1,29 @@
 # LOG — 动作日志（ub-mode）
 
+### 真机复跑 smoke 出现全局 SIGSEGV（不是本轮 Lua 改动）
+
+修完图片链路后复跑 `shelf_smoke` / `dk3_smoke` / `reader_render_smoke`，三者 `RC=139`
+且**零输出**。逐步隔离取证（探针在设备 /tmp）：
+
+| 探针 | 结果 |
+| --- | --- |
+| `fb1.lua`（fb_open/fill/close，不 require） | RC=0 正常 |
+| `p30.lua`（30 行 print + io.flush） | RC=0 正常 |
+| `req1.lua`（只 `require("download")`） | RC=0 正常 |
+| `dl_verify.lua`（**20 分钟前刚跑出 7 本书**） | RC=139 |
+| `menu.lua --smoke`（**同一次部署里 PIXEL-CHECK PASS 过**，本轮未改 menu） | RC=139 |
+| 设备内存 | `-/+ buffers/cache` 可用 137MB，非 OOM |
+
+判据：崩溃集合恰好是**要加载 freetype 字面并绘制**的脚本；纯 fb、纯 print、纯 require 都正常；
+且同一份 `menu.lua`（我从未改过）在同一次部署里先 PASS 后 139 ⇒ **不是本轮 Lua 改动引入**，
+是设备侧运行状态退化（怀疑前几次 139 崩溃把 fb/字体资源留在脏状态）。
+另记一个取证坑：重定向/管道下 LuaJIT 的 stdout 是全缓冲，崩溃时缓冲丢失 ⇒ "零输出"是假象，
+必须 `print` 后显式 `io.flush()`（或用 tty）才能定位崩溃点。
+
+**下一步**：设备重启（或等 fb/字体状态释放）后重跑三 smoke + `menu --smoke`；
+若 `weread`/`weread-dyn`（md5 相同）仍崩，则 `make clean && make` 重建 C 层再部署——
+本轮图片修复的设备端到端证据是在退化**之前**取得的，已记录在上面两条里。
+
 ### 第三轮（代码审查）：「已下载」漏掉 CB_ 型真书 + 书架死代码减法 + LOG 合并损伤清理
 
 **同一类偏见：只认纯数字 bookId**（用户报"没图片"的那本书正是 CB_2H6B… 型）：
